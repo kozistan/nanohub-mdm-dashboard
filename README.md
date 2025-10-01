@@ -17,7 +17,7 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 
 ```
 ┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
-│  Web Frontend   │────────▶│  Flask API       │────────▶│   NanoMDM       │
+│  Web Frontend   │────────▶│  Flask API       │────────▶│   NanoHUB       │
 │  (HTML/CSS/JS)  │         │  (Python)        │         │   Backend       │
 └─────────────────┘         └──────────────────┘         └─────────────────┘
                                      │
@@ -29,7 +29,7 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 ## Prerequisites
 
 - Python 3.8+
-- NanoMDM server (running)
+- NanoHUB server (running)
 - MySQL/MariaDB database
 - Nginx or Apache (for web frontend)
 - systemd (for service management)
@@ -77,7 +77,7 @@ Edit authentication in command scripts:
 - `opt/nanohub/tools/api/commands/installed_application_list`
 - `opt/nanohub/tools/api/commands/profile_list`
 
-Replace NanoMDM credentials:
+Replace NanoHUB credentials:
 ```bash
 -u "nanohub:YOUR_API_KEY_HERE"
 "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID"
@@ -178,7 +178,7 @@ DB_USER="nanohub"
 DB_PASSWORD="your_password"
 DB_NAME="nanohub_mdm"
 
-# NanoMDM Configuration
+# NanoHUB Configuration
 NANOMDM_URL="http://localhost:9004"
 NANOMDM_API_KEY="your_api_key"
 
@@ -323,7 +323,7 @@ SOFTWARE.
 
 ## Acknowledgments
 
-- Built for NanoMDM by micromdm
+- Built for NanoHUB by micromdm
 - Uses Flask web framework
 - Frontend with vanilla JavaScript (no frameworks)
 
