@@ -118,25 +118,36 @@ sudo nano /etc/systemd/system/mdm-flask-api.service  # Edit paths
 
 ### 7. Configure Nginx
 
-```nginx
-server {
-    listen 80;
-    server_name mdm.yourdomain.com;
-    
-    root /var/www/mdm-web;
-    index index.html;
-    
-    location / {
-        try_files $uri $uri/ =404;
-    }
-    
-    location /api/ {
-        proxy_pass http://127.0.0.1:9006;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
+Copy the example nginx configuration:
+
+```bash
+sudo cp etc/nginx/nginx.conf.example /etc/nginx/sites-available/nanohub-mdm
+sudo ln -s /etc/nginx/sites-available/nanohub-mdm /etc/nginx/sites-enabled/
 ```
+
+Edit the configuration:
+
+```bash
+sudo nano /etc/nginx/sites-enabled/nanohub-mdm
+```
+
+Update these settings:
+- `server_name` - your domain or IP
+- `listen` - port (default 80, or 8000 for non-privileged)
+
+Test and reload nginx:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+The configuration includes:
+- Flask backend proxy (port 9006) for all `/api/*` endpoints
+- Static file serving with caching
+- Security headers
+- Direct file access for `devices.json`
+- Logging configuration
 
 ### 8. Start Services
 
@@ -285,6 +296,30 @@ curl -X POST http://localhost:9006/api/device-info \
 3. Commit changes (`git commit -m 'Add amazing feature'`)
 4. Push to branch (`git push origin feature/amazing-feature`)
 5. Open Pull Request
+
+## License
+
+MIT License
+
+Copyright (c) 2025 [Your Name]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ## Acknowledgments
 
