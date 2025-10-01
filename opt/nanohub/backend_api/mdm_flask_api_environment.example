@@ -1,0 +1,38 @@
+# NanoHUB Configuration
+NANOHUB_API_KEY="xxx"
+NANOHUB_URL="http://xxx:xxx"
+
+# VPP
+VPP_TOKEN="xxx"
+
+# DEP Configuration
+BASE_URL="http://xxx:xxx"
+APIKEY="xxx"
+DEP_NAME="xxx.xxx.xxx"
+DEP_API_USERNAME="xxx"
+
+# NanoCMD Configuration
+NANOCMD_URL="http://xxx:xxx"
+NANOCMD_API_KEY="xxx"
+
+# SCEP Configuration
+SCEP_URL="http://xxx:xxx"
+SCEP_CHALLENGE="xxx"
+
+# Database Configuration
+DB_HOST="xxx"
+DB_PORT="xxx"
+DB_USER="xxx"
+DB_PASSWORD="xxx"
+DB_NAME="xxx"
+DB_DEP="xxx"
+DB_SCEP="xxx"
+
+# Webhook Configuration
+WEBHOOK_URL="http://xxx:xxx/webhook"
+
+# Paths
+NANOHUB_HOME="/path/to/nanohub"
+CERTS_DIR="/path/to/certs"
+DEP_DIR="/path/to/dep"
+SCEP_DIR="/path/to/scep"

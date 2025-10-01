@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NanoHUB MDM Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="static/dashboard.css">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+  <link rel="manifest" href="/static/site.webmanifest">
+  <link rel="mask-icon" href="/static/safari-pinned-tab.svg" color="#3572e3">
+  <link rel="shortcut icon" href="/static/favicon.ico">
+  <meta name="msapplication-TileColor" content="#3572e3">
+  <meta name="msapplication-config" content="/static/browserconfig.xml">
+  <meta name="theme-color" content="#3572e3">
+  <style>
+    .loading-active {
+      color: #3572e3;
+      font-weight: bold;
+      font-size: 1.13em;
+      margin-left: 10px;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div style="display: flex; justify-content: center; align-items: center;">
+      <img id="logo" src="/static/logo.svg" alt="Logo"/>
+    </div>
+    <h1>NanoHUB MDM Dashboard</h1>
+
+    <div class="panel" id="dep-panel">
+      <div class="panel-title">DEP Server Information</div>
+      <span class="loading" id="dep-loading"></span>
+      <div id="dep-content"></div>
+      <div class="panel-error" id="dep-error"></div>
+    </div>
+
+    <div class="panel" id="cert-panel">
+      <div class="panel-title">Certificates Expiry</div>
+      <span class="loading" id="cert-loading"></span>
+      <div id="cert-content"></div>
+      <div class="panel-error" id="cert-error"></div>
+    </div>
+
+    <div class="panel" id="device-panel">
+      <div class="panel-title">Device Panel</div>
+      <div class="panel-actions">
+        <input type="text" id="device-search-input" placeholder="Enter hostname / serial / UUID" style="width:220px;padding:7px">
+        <button onclick="searchDevice()" class="refresh-btn" style="margin-left:6px;">Search</button>
+        <button onclick="showAllDevices()" class="refresh-btn" style="margin-left:6px;">Show All</button>
+      </div>
+      <span class="loading" id="device-loading"></span>
+      <div id="device-content"></div>
+      <div class="panel-error" id="device-error"></div>
+    </div>
+
+    <div class="panel" id="functions-panel" style="margin-top:18px;">
+      <div class="panel-title">Functions</div>
+      <div class="panel-actions">
+        <button onclick="deviceInfo()" class="refresh-btn" style="margin-left:6px;">Device Info</button>
+        <button onclick="mdmAnalyzer()" class="refresh-btn" style="margin-left:6px;">MDM Analyzer</button>
+        <button onclick="osUpdates()" class="refresh-btn" style="margin-left:6px;">OS Updates</button>
+        <button onclick="profileList()" class="refresh-btn" style="margin-left:6px;">Profile List</button>
+        <button onclick="installedApps()" class="refresh-btn" style="margin-left:6px;">Installed Applications</button>
+      </div>
+      <span class="loading" id="function-loading"></span>
+      <div id="function-content"></div>
+      <div class="panel-error" id="function-error"></div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="modal-bg" onclick="closeModal(event)">
+    <div class="modal" id="modal-content">
+      <span class="close-modal" onclick="closeModal(event)">&times;</span>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <script>
+    // Error message definitions for each function/context
+    const ERROR_MESSAGES = {
+      // Device Panel errors
+      device_search_empty: "Please enter device hostname, serial or UUID",
+      device_search_not_found: "Device not found",
+      device_search_error: "Device not found",
+      device_show_all_error: "Check devices.json path",
+      
+      // DEP Panel errors
+      dep_load_error: "Something went wrong",
+      
+      // Certificate Panel errors
+      cert_load_error: "Something went wrong",
+      
+      // Function Panel - Device Info
+      device_info_empty: "Device not responding",
+      device_info_not_found: "Device not responding",
+      device_info_error: "Device not responding",
+      
+      // Function Panel - MDM Analyzer
+      mdm_analyzer_empty: "Check devices.json path",
+      mdm_analyzer_error: "Check devices.json path",
+      
+      // Function Panel - OS Updates
+      os_updates_empty: "Device is updated or not responding",
+      os_updates_not_found: "Device is updated or not responding",
+      os_updates_error: "Device is updated or not responding",
+      
+      // Function Panel - Profile List
+      profile_list_empty: "Device not responding",
+      profile_list_not_found: "Device not responding",
+      profile_list_error: "Device not responding",
+      
+      // Function Panel - Installed Apps
+      installed_apps_empty: "Device not responding",
+      installed_apps_not_found: "Device not responding",
+      installed_apps_error: "Device not responding"
+    };
+
+    // Get error message by key
+    function getErrorMessage(key) {
+      return ERROR_MESSAGES[key] || "mrdat brouka do hlavy";
+    }
+
+    // Set spinner/banner for function panel
+    function showFunctionLoading() {
+      let el = document.getElementById('function-loading');
+      el.textContent = 'Waiting for device response...';
+      el.classList.add('loading-active');
+    }
+    
+    function hideFunctionLoading() {
+      let el = document.getElementById('function-loading');
+      el.textContent = '';
+      el.classList.remove('loading-active');
+    }
+
+    // Clear function panel error
+    function clearFuncError() {
+      document.getElementById('function-error').textContent = '';
+    }
+
+    // Generic API fetch wrapper
+    async function apiFetch({url, method='GET', body=null, onSuccess, onError, loadingId, errorId, contentId, showBanner}) {
+      if(showBanner && loadingId === 'function-loading') showFunctionLoading();
+      else if(loadingId) document.getElementById(loadingId).textContent = 'Loading...';
+      if(errorId) document.getElementById(errorId).textContent = '';
+      
+      try {
+        let opts = {method, headers: {'Content-Type':'application/json'}};
+        if(body) opts.body = JSON.stringify(body);
+        const res = await fetch(url, opts);
+        
+        if(res.ok) {
+          const data = await res.json();
+          if(errorId) document.getElementById(errorId).textContent = '';
+          if(onSuccess) onSuccess(data);
+          if(loadingId === 'function-loading' && showBanner) hideFunctionLoading();
+          else if (loadingId) document.getElementById(loadingId).textContent = '';
+        } else {
+          const error = await res.text();
+          if(onError) onError(error);
+          if(loadingId === 'function-loading' && showBanner) hideFunctionLoading();
+          else if (loadingId) document.getElementById(loadingId).textContent = '';
+        }
+      } catch(e) {
+        if(onError) onError(e.message);
+        if(loadingId === 'function-loading' && showBanner) hideFunctionLoading();
+        else if (loadingId) document.getElementById(loadingId).textContent = '';
+      }
+    }
+
+    // Detect input field type (UUID, serial, or hostname)
+    function detectFieldType(input) {
+      if (/^[a-f0-9\-]{36}$/i.test(input)) return 'uuid';
+      else if (/^\d+$/.test(input)) return 'serial';
+      else return 'hostname';
+    }
+
+    // === Device Panel Functions ===
+
+    // Device Panel: Search
+    function searchDevice() {
+      document.getElementById('device-error').textContent = '';
+      let input = document.getElementById('device-search-input').value.trim();
+      
+      if(!input) {
+        document.getElementById('device-error').textContent = getErrorMessage('device_search_empty');
+        return;
+      }
+      
+      let field = detectFieldType(input);
+      apiFetch({
+        url: '/api/device-search',
+        method: 'POST',
+        body: {field, value: input},
+        onSuccess: dev => {
+          let html = `<table>
+            <tr><th>UUID</th><td>${dev.uuid||''}</td></tr>
+            <tr><th>Serial</th><td>${dev.serial||''}</td></tr>
+            <tr><th>OS</th><td>${dev.os||''}</td></tr>
+            <tr><th>Hostname</th><td>${dev.hostname||''}</td></tr>
+            <tr><th>Manifest</th><td>${dev.manifest||''}</td></tr>
+            <tr><th>Account</th><td>${dev.account||''}</td></tr>
+          </table>
+          `;
+          document.getElementById('device-content').innerHTML = html;
+        },
+        onError: err => {
+          document.getElementById('device-content').innerHTML = '';
+          document.getElementById('device-error').textContent = getErrorMessage('device_search_error');
+        },
+        loadingId: 'device-loading',
+        errorId: 'device-error',
+        contentId: 'device-content'
+      });
+    }
+
+    // Device Panel: Show All
+    function showAllDevices() {
+      document.getElementById('device-error').textContent = '';
+      apiFetch({
+        url: '/api/devices.json',
+        method: 'GET',
+        body: null,
+        onSuccess: function (devices) {
+          let html = makeDeviceTable(devices);
+          document.getElementById('device-content').innerHTML = html;
+        },
+        onError: function (err) {
+          document.getElementById('device-content').innerHTML = "";
+          document.getElementById('device-error').textContent = getErrorMessage('device_show_all_error');
+        },
+        loadingId: 'device-loading',
+        errorId: 'device-error',
+        contentId: 'device-content'
+      });
+    }
+
+    // Build device table HTML
+    function makeDeviceTable(devices) {
+      if (!devices.length) return "<div>No devices found.</div>";
+      let html = `<table class="analyzer-table"><tr>
+        <th>UUID</th><th>Hostname</th><th>Serial</th><th>OS</th><th>Account</th><th>Manifest</th></tr>`;
+      devices.forEach(function (dev) {
+        html += `<tr>
+          <td>${dev.uuid}</td>
+          <td>${dev.hostname}</td>
+          <td>${dev.serial}</td>
+          <td>${dev.os}</td>
+          <td>${dev.account}</td>
+          <td>${dev.manifest}</td>
+        </tr>`;
+      });
+      html += "</table>";
+      return html;
+    }
+
+    // === Functions Panel ===
+
+    // Function Panel: Device Info
+    function deviceInfo() {
+      clearFuncError();
+      let input = document.getElementById('device-search-input').value.trim();
+      
+      if(!input) {
+        reportFuncError(getErrorMessage('device_info_empty'));
+        return;
+      }
+      
+      let field = detectFieldType(input);
+      apiFetch({
+        url: '/api/device-info',
+        method: 'POST',
+        body: {type: field, value: input},
+        onSuccess: function(info) {
+          let html = `<h3>Device Info Result</h3>
+            <table class="analyzer-table">
+              <tr><th>Device Name</th><td>${info.device_name||''}</td></tr>
+              <tr><th>OS Version</th><td>${info.os_version||''}</td></tr>
+              <tr><th>Serial Number</th><td>${info.serial_number||''}</td></tr>
+              <tr><th>Status</th><td>${info.status||''}</td></tr>
+              <tr><th>Checkin Time</th><td>${info.checkin_time||''}</td></tr>
+            </table>`;
+          document.getElementById('function-content').innerHTML = html;
+        },
+        onError: function(err) {
+          reportFuncError(getErrorMessage('device_info_error'));
+        },
+        loadingId: 'function-loading',
+        errorId: 'function-error',
+        contentId: 'function-content',
+        showBanner: true
+      });
+    }
+
+    // Function Panel: MDM Analyzer
+    function mdmAnalyzer() {
+      clearFuncError();
+      let input = document.getElementById('device-search-input').value.trim();
+      
+      if(!input) {
+        reportFuncError(getErrorMessage('mdm_analyzer_empty'));
+        return;
+      }
+      
+      let field = detectFieldType(input);
+      apiFetch({
+        url: '/api/mdm-analyzer?type=' + field + '&value=' + encodeURIComponent(input),
+        onSuccess: function(json) {
+          let sections = [
+            "ACTIVITY_SUMMARY",
+            "DEVICE_INFO",
+            "DEVICE_AUTH",
+            "CURRENT_FULL_DEVICE_STATUS",
+            "RECENT_CHECKINS",
+            "COMMANDS_BY_TYPE",
+            "PENDING_COMMANDS"
+          ];
+          let html = "<h3>MDM Analyzer Result</h3>";
+          sections.forEach(function(section) {
+            let rows = json[section] || [];
+            if (rows.length > 0) {
+              html += `<h4 style="margin-top:18px;">${section.replace(/_/g," ")}</h4>`;
+              html += makeAnalyzerTable(rows, section);
+            }
+          });
+          document.getElementById('function-content').innerHTML = html || '<div>No analyzer data found.</div>';
+        },
+        onError: function(err) {
+          reportFuncError(getErrorMessage('mdm_analyzer_error'));
+        },
+        loadingId: 'function-loading',
+        errorId: 'function-error',
+        contentId: 'function-content',
+        showBanner: true
+      });
+    }
+
+    // Build analyzer table HTML
+    function makeAnalyzerTable(rows, section) {
+      if (!rows.length) return '';
+      let keySet = new Set();
+      rows.forEach(obj => Object.keys(obj).forEach(k => keySet.add(k)));
+      let keys = Array.from(keySet);
+
+      const sectionLabelMap = {
+        "ACTIVITY_SUMMARY": "time",
+        "DEVICE_INFO": "time",
+        "DEVICE_AUTH": "build",
+        "CURRENT_FULL_DEVICE_STATUS": "status",
+        "COMMANDS_BY_TYPE": "timestamp",
+        "RECENT_CHECKINS": "check_in_time",
+        "PENDING_COMMANDS": "command_uuid"
+      };
+
+      let headerMap = keys.map((k, idx) =>
+        (k === "")
+          ? sectionLabelMap[section] || "Label"
+          : k
+      );
+
+      let html = '<table class="analyzer-table"><tr>';
+      headerMap.forEach(function(k) { html += `<th>${k}</th>`; });
+      html += '</tr>';
+      rows.forEach(function(row) {
+        html += '<tr>';
+        keys.forEach(function(origKey, idx) {
+          html += `<td>${row[origKey] !== undefined ? row[origKey] : ''}</td>`;
+        });
+        html += '</tr>';
+      });
+      html += '</table>';
+      return html;
+    }
+
+    // Function Panel: OS Updates
+    function osUpdates() {
+      clearFuncError();
+      let input = document.getElementById('device-search-input').value.trim();
+      
+      if (!input) {
+        reportFuncError(getErrorMessage('os_updates_empty'));
+        return;
+      }
+      
+      let field = detectFieldType(input);
+      showFunctionLoading();
+
+      apiFetch({
+        url: '/api/device-search',
+        method: 'POST',
+        body: { field, value: input },
+        onSuccess: dev => {
+          if (dev.uuid) {
+            apiFetch({
+              url: '/api/os-updates',
+              method: 'POST',
+              body: { udid: dev.uuid },
+              onSuccess: updates => {
+                let html = `<h3>OS Updates Result</h3>
+                  <table>
+                  <tr><th>Device</th><td>${(dev.hostname || '') + ' / ' + (dev.serial || '')}</td></tr>
+                  <tr><th>UUID</th><td>${dev.uuid || ''}</td></tr></table><br>
+                  <table><tr><th>Name</th><th>ProductKey</th><th>Version</th><th>Critical</th><th>RestartRequired</th></tr>`;
+                if (Array.isArray(updates) && updates.length) {
+                  updates.forEach(u => {
+                    html += `<tr>
+                      <td>${u.ProductName || u.HumanReadableName || u.Version || ''}</td>
+                      <td>${u.ProductKey || ''}</td>
+                      <td>${u.Version || ''}</td>
+                      <td>${u.IsCritical ? 'Yes' : 'No'}</td>
+                      <td>${u.RestartRequired ? 'Yes' : 'No'}</td>
+                      </tr>`;
+                  });
+                  html += "</table>";
+                } else {
+                  html += "</table><div>No OS updates available.</div>";
+                }
+                document.getElementById('function-content').innerHTML = html;
+                hideFunctionLoading();
+              },
+              onError: err => {
+                reportFuncError(getErrorMessage('os_updates_error'));
+                hideFunctionLoading();
+              }
+            });
+          } else {
+            reportFuncError(getErrorMessage('os_updates_not_found'));
+            hideFunctionLoading();
+          }
+        },
+        onError: err => {
+          reportFuncError(getErrorMessage('os_updates_error'));
+          hideFunctionLoading();
+        }
+      });
+    }
+
+    // Function Panel: Profile List
+    function profileList() {
+      clearFuncError();
+      let input = document.getElementById('device-search-input').value.trim();
+      
+      if (!input) {
+        reportFuncError(getErrorMessage('profile_list_empty'));
+        return;
+      }
+      
+      let field = detectFieldType(input);
+      showFunctionLoading();
+      
+      apiFetch({
+        url: '/api/device-search',
+        method: 'POST',
+        body: { field, value: input },
+        onSuccess: dev => {
+          if (dev.uuid) {
+            apiFetch({
+              url: '/api/profile-list',
+              method: 'POST',
+              body: { udid: dev.uuid },
+              onSuccess: profiles => {
+                let html = `<h3>Profile List Result</h3>
+                            <table>
+                              <tr><th>Display Name</th><th>Identifier</th></tr>`;
+                profiles.forEach(p => {
+                  html += `<tr>
+                            <td>${p.PayloadDisplayName || ''}</td>
+                            <td>${p.PayloadIdentifier || ''}</td>
+                          </tr>`;
+                });
+                html += "</table>";
+                document.getElementById('function-content').innerHTML = html;
+                hideFunctionLoading();
+              },
+              onError: err => {
+                reportFuncError(getErrorMessage('profile_list_error'));
+                hideFunctionLoading();
+              }
+            });
+          } else {
+            reportFuncError(getErrorMessage('profile_list_not_found'));
+            hideFunctionLoading();
+          }
+        },
+        onError: err => {
+          reportFuncError(getErrorMessage('profile_list_error'));
+          hideFunctionLoading();
+        }
+      });
+    }
+
+    // Function Panel: Installed Applications
+    function installedApps() {
+      clearFuncError();
+      let input = document.getElementById('device-search-input').value.trim();
+      
+      if (!input) {
+        reportFuncError(getErrorMessage('installed_apps_empty'));
+        return;
+      }
+      
+      let field = detectFieldType(input);
+      showFunctionLoading();
+      
+      apiFetch({
+        url: '/api/device-search',
+        method: 'POST',
+        body: { field, value: input },
+        onSuccess: dev => {
+          if (dev.uuid) {
+            apiFetch({
+              url: '/api/installed-apps',
+              method: 'POST',
+              body: { udid: dev.uuid },
+              onSuccess: apps => {
+                let html = `<h3>Installed Applications Result</h3>
+                            <table>
+                              <tr><th>Name</th><th>Bundle ID</th><th>Version</th></tr>`;
+                apps.forEach(a => {
+                  html += `<tr>
+                            <td>${a.Name || ''}</td>
+                            <td>${a.BundleID || ''}</td>
+                            <td>${a.Version || ''}</td>
+                          </tr>`;
+                });
+                html += "</table>";
+                document.getElementById('function-content').innerHTML = html;
+                hideFunctionLoading();
+              },
+              onError: err => {
+                reportFuncError(getErrorMessage('installed_apps_error'));
+                hideFunctionLoading();
+              }
+            });
+          } else {
+            reportFuncError(getErrorMessage('installed_apps_not_found'));
+            hideFunctionLoading();
+          }
+        },
+        onError: err => {
+          reportFuncError(getErrorMessage('installed_apps_error'));
+          hideFunctionLoading();
+        }
+      });
+    }
+
+    // Display function panel error message
+    function reportFuncError(msg) {
+      document.getElementById('function-error').textContent = msg;
+      document.getElementById('function-content').innerHTML = '';
+      hideFunctionLoading();
+    }
+
+    // === Modal Functions ===
+
+    // Open modal with content
+    function openModal(title, content) {
+      document.getElementById('modal-body').innerHTML = `<h3>${title}</h3><pre style='max-width:500px;'>${content}</pre>`;
+      document.getElementById('modal-bg').style.display='flex';
+    }
+    
+    // Close modal
+    function closeModal(e) {
+      if(e.target.classList.contains('modal-bg')||e.target.classList.contains('close-modal')) {
+        document.getElementById('modal-bg').style.display='none';
+      }
+    }
+
+    // === Page Load Functions ===
+
+    // Initialize page on load
+    window.onload = function() {
+      loadDEP();
+      loadCertExpiry();
+    };
+    
+    // Load DEP server information
+    function loadDEP() {
+      apiFetch({
+        url: '/api/dep-account-detail',
+        onSuccess: data => {
+          let html = `<table>
+            <tr><th>Server Name</th><td>${data.server_name||''}</td></tr>
+            <tr><th>Organization</th><td>${data.org_name||''}, ${data.org_address||''}</td></tr>
+            <tr><th>Admin</th><td>${data.admin_id||''}</td></tr>
+            <tr><th>Server UUID</th><td>${data.server_uuid||''}</td></tr>
+            <tr><th>Org Email</th><td>${data.org_email||''}</td></tr>
+            <tr><th>Org Phone</th><td>${data.org_phone||''}</td></tr>
+          </table>`;
+          document.getElementById('dep-content').innerHTML = html;
+        },
+        onError: err => {
+          document.getElementById('dep-content').innerHTML = '';
+          document.getElementById('dep-error').textContent = getErrorMessage('dep_load_error');
+        },
+        loadingId: 'dep-loading',
+        errorId: 'dep-error',
+        contentId: 'dep-content'
+      });
+    }
+
+    // Load certificate expiry information
+    function loadCertExpiry() {
+      apiFetch({
+        url: '/api/cfg-get-cert',
+        onSuccess: function (certs) {
+          var html = '<table class="analyzer-table"><tr><th>File Name</th><th>Intended Usage</th><th>Expiry Date</th></tr>';
+          certs.forEach(function(cert) {
+            html += '<tr><td>' + cert.name + '</td><td>' + cert.usage + '</td><td>' + cert.expiry + '</td></tr>';
+          });
+          html += '</table>';
+          document.getElementById("cert-content").innerHTML = html;
+        },
+        onError: function (err) {
+          document.getElementById("cert-content").innerHTML = '';
+          document.getElementById("cert-error").textContent = getErrorMessage('cert_load_error');
+        },
+        loadingId: "cert-loading",
+        errorId: "cert-error",
+        contentId: "cert-content"
+      });
+    }
+  </script>
+</body>
+</html>

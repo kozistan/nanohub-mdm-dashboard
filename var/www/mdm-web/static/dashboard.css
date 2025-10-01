@@ -1,0 +1,198 @@
+/* Base layout */
+body {
+  background-color: #f7f8fa;
+  color: #21243b;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica Neue, Arial, Noto Sans, sans-serif;
+  font-size: 18px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Headings */
+h1, .main-title {
+  font-size: 1.1rem;
+  line-height: 2.5rem;
+  font-weight: 700;
+  color: #21243b;
+  margin-bottom: 18px;
+  text-align: center;
+  letter-spacing: -0.03em;
+}
+
+h2, .panel-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #21243b;
+  margin-bottom: 10px;
+  text-align: center;
+  letter-spacing: -0.01em;
+}
+
+/* Panels, boxes */
+.panel, .info-panel {
+  background-color: #fff;
+  box-shadow: 0 10px 24px -3px rgba(0,0,0,0.09), 0 4px 8px -4px rgba(0,0,0,0.08);
+  border-radius: 5px;
+  padding: 1.5rem 2rem;
+  margin: 30px auto;
+  max-width: 1500px;
+  width: 100%;
+  text-align: center;
+  font-size: 13px;
+}
+
+.info-panel {
+  border-left: 6px solid #21243b;
+  color: #51243b;
+  padding: 2rem 2.5rem 1.5rem 2.5rem;
+}
+
+/* Buttons */
+.btn, button, .button {
+  background: #ccd3d9;
+  color: #21243b;
+  border: none;
+  border-radius: 5px;
+  padding: 8px 16px;
+  font-family: inherit;
+  font-weight: 500;
+  font-size: 1em;
+  margin: 12px 10px 0 0;
+  box-shadow: 0 1px 4px rgba(60,65,124,0.05);
+  cursor: pointer;
+  transition: background 0.18s;
+}
+.btn.red, .button.red, button.red {
+  background: #e92128;
+  color: #fff !important;
+}
+.btn:hover, .button:hover, button:hover {
+  background: #eeb8b8;
+}
+.btn.red:hover, .button.red:hover, button.red:hover {
+  background: #cb2128;
+}
+
+/* Paragraphs and helper texts */
+p, .text {
+  color: #35394f;
+  font-size: 1.08em;
+}
+
+/* Important text */
+.font-bold { font-weight: 700; }
+.text-red, .error { color: #e92128; }
+.text-center { text-align: center; }
+.text-gray { color: #4b5563; }
+.text-black { color: #000; }
+
+/* Links */
+a {
+  color: #276beb;
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.18s;
+}
+a:hover { text-decoration: underline; color: #e92128; }
+
+/* Inputs */
+input[type="text"], input[type="password"], input[type="number"] {
+  border: 1px solid #bcd2f7;
+  border-radius: 5px;
+  font-size: 1em;
+  padding: 9px 13px;
+  background: #f5f7fb;
+  color: #283366;
+  transition: border 0.15s, background 0.15s;
+}
+input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus {
+  border-color: #21243b;
+  background: #f0f3fa;
+}
+
+/* Tables */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  background: #f7f8fa;
+  border-radius: 8px;
+}
+th, td {
+  padding: 3px 7px;
+  text-align: left;
+  border: 1px solid #bdbdbd;
+}
+th {
+  background: #e7eaf2;
+  color: #21243b;
+  font-weight: 700;
+}
+
+/* Utility classes for layout/spacing */
+.mx-auto { margin-left: auto; margin-right: auto; }
+.my-6 { margin-top: 1.5rem; margin-bottom: 1.5rem; }
+.mt-3 { margin-top: 0.75rem; }
+.mb-4 { margin-bottom: 1rem; }
+.p-6 { padding: 1.5rem; }
+.rounded { border-radius: 0.5rem; }
+.shadow-lg { box-shadow: 0 10px 15px -3px rgb(0 0 0 / 10%), 0 4px 6px -4px rgb(0 0 0 / 10%); }
+
+/* Custom class for red button */
+.btn-red,
+.button-red,
+button.red {
+  background-color: #e92128 !important;
+  color: #fff !important;
+}
+
+/* Responsive for various devices */
+@media (max-width: 700px) {
+  .panel, .info-panel { padding: 1em 0.5em; }
+  h1 { font-size: 1.4rem; }
+}
+
+/* Loading banner for Functions Panel - unified with error styling */
+#function-loading.loading-active {
+  background: #f7dcdc;
+  border: 0.5px solid #f7dcdc;
+  color: #e92128;
+  border-radius: 5px;
+  margin: 14px auto 10px auto;
+  max-width: 600px;
+  box-shadow: 0 3px 12px -3px rgba(233,33,40,0.08);
+  padding: 6px 22px;
+  font-size: 1.08em;
+  text-align: center;
+  display: inline-block;
+  letter-spacing: -0.01em;
+  font-weight: normal;
+}
+
+@media (max-width: 700px) {
+  #function-loading.loading-active {
+    font-size: 0.97em;
+    padding: 6px 10px;
+  }
+}
+
+/* Error panel styling */
+.panel-error {
+    background: #f7dcdc;
+    border: 0.5px solid #f7dcdc;
+    color: #e92128;
+    border-radius: 5px;
+    margin: 14px auto 10px auto;
+    max-width: 600px;
+    box-shadow: 0 3px 12px -3px rgba(233,33,40,0.08);
+    padding: 6px 22px;
+    font-size: 1.08em;
+    text-align: center;
+    display: none;
+    letter-spacing: -0.01em;
+}
+
+.panel-error:not(:empty) {
+    display: block;
+}
