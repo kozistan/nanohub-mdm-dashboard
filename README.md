@@ -1,6 +1,6 @@
 # NanoHUB MDM Dashboard
 
-Web-based management dashboard for Apple MDM (Mobile Device Management) using NanoMDM backend.
+Web-based management dashboard for Apple MDM (Mobile Device Management) using NanoHUB backend.
 
 ## Features
 
