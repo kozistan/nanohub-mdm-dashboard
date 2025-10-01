@@ -201,25 +201,27 @@ def deviceinfo():
         return jsonify({"error": "Device not found"}), 404
     try:
         result = subprocess.run(
-            ['/opt/nanohub/tools/api/commands/device_information', uuid], 
+            ['/opt/nanohub/tools/api/commands/device_information', uuid],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
-        response_data = json.loads(result.stdout)
-        command_uuid = response_data.get('command_uuid')
+        # OPRAVA: Hledej UUID v plain textu stejně jako ostatní
+        match = re.search(r'[a-f0-9\-]{36}', result.stdout)
+        command_uuid = match.group(0) if match else None
         if not command_uuid:
-            return jsonify({"error": "No command_uuid in response"}), 500
+            return jsonify({"error": "No command_uuid found from shell!"}), 500
     except Exception as e:
         return jsonify({"error": f"Failed to trigger DeviceInformation: {e}"}), 500
-    
+
     block = universal_webhook_poll(command_uuid, "uuid", initial_sleep=3)
     info = extract_device_info(block) if block else {}
     if not info:
         return jsonify({"error": "Device info not found"}), 404
     return jsonify(info)
 
+        
 @app.route('/api/os-updates', methods=['POST'])
 def os_updates():
     udid = request.json.get('udid')
