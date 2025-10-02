@@ -10,6 +10,7 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **OS Updates**: Check available OS updates for devices
 - **Profile Management**: List installed configuration profiles
 - **Application Inventory**: View installed applications on devices
+- **Wake Device**: Remote wake sleeping Mac devices using pmset schedule
 - **DEP Integration**: Display DEP server information
 - **Certificate Monitoring**: Track certificate expiration dates
 
@@ -23,7 +24,9 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
                                      │
                                      ├──────────▶ MySQL Database
                                      │
-                                     └──────────▶ Webhook Log Parser
+                                     ├──────────▶ Webhook Log Parser
+                                     │
+                                     └──────────▶ Custom Agent (mdmagent)
 ```
 
 ## Prerequisites
@@ -33,6 +36,7 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - MySQL/MariaDB database
 - Nginx or Apache (for web frontend)
 - systemd (for service management)
+- **mdmagent**: Custom agent running on managed macOS devices ([mdmagent repo](https://github.com/kozistan/mdmagent-micromdm))
 
 ## Installation
 
@@ -206,6 +210,51 @@ const ERROR_MESSAGES = {
 2. Enter device hostname, serial, or UUID in search field
 3. Use function buttons to query device information
 
+### Wake Device Function
+
+The Wake Device feature remotely wakes sleeping Mac devices using the `pmset schedule wake` command.
+
+**Requirements:**
+- **mdmagent** must be installed and running on target devices
+- Agent repository: https://github.com/kozistan/mdmagent-micromdm
+- Agent polls for commands every 5 seconds
+- Commands delivered via HTTP to `repo.sloto.space/commands/{UUID}.json`
+
+**How it works:**
+1. Dashboard sends wake command via `send_command` script
+2. Command uploaded to HTTP repository as JSON
+3. mdmagent on device polls repository every 5 seconds
+4. Agent executes `pmset schedule wake` command
+5. Device wakes after ~30 seconds
+6. Agent reports result to webhook
+7. Dashboard displays execution status
+
+**Usage:**
+```bash
+# Manual command execution
+/opt/nanohub/tools/api/commands/send_command <UUID> shell "pmset schedule wake 'MM/DD/YY HH:MM:SS'"
+
+# Via dashboard
+1. Enter device hostname/serial/UUID
+2. Click "Wake Device" button
+3. Wait ~30 seconds for response
+```
+
+**Timing:**
+- Initial wait: 15 seconds (for command delivery)
+- Device wake: ~10 seconds
+- Response polling: 5 seconds
+- Total: ~30 seconds
+
+**Monitoring:**
+```bash
+# On managed device
+tail -f /var/log/mdmagent.log
+
+# On NanoHUB server
+tail -f /var/log/nanohub/webhook.log
+```
+
 ### API Endpoints
 
 - `GET /api/dep-account-detail` - DEP server information
@@ -217,6 +266,7 @@ const ERROR_MESSAGES = {
 - `POST /api/os-updates` - Check available OS updates
 - `POST /api/profile-list` - List installed profiles
 - `POST /api/installed-apps` - List installed applications
+- `POST /api/wake-device` - Remote wake device (requires mdmagent)
 
 ## Troubleshooting
 
@@ -257,6 +307,42 @@ ls -la /var/log/nanohub/webhook.log
 tail -f /var/log/nanohub/webhook.log
 ```
 
+### Wake Device not working
+
+```bash
+# Check mdmagent is running on device
+ssh user@device "launchctl list | grep mdmagent"
+
+# Check agent log on device
+ssh user@device "tail -f /var/log/mdmagent.log"
+
+# Verify command delivery
+curl -u 'munkirepo:password' https://repo.sloto.space/commands/{UUID}.json
+
+# Test manual wake command
+/opt/nanohub/tools/api/commands/send_command {UUID} shell "pmset schedule wake '10/02/25 14:30:00'"
+
+# Check webhook for response
+grep "COMMAND RESULT" /var/log/nanohub/webhook.log | tail -5
+```
+
+### Common Wake Device issues
+
+1. **Device not responding**
+   - Verify mdmagent is installed and running
+   - Check network connectivity
+   - Verify UUID is correct
+
+2. **Command not executed**
+   - Check command file permissions on repo server
+   - Verify agent can access HTTP repository
+   - Check for firewall blocking agent
+
+3. **Timeout errors**
+   - Device may be offline or sleeping
+   - Network latency issues
+   - Agent polling interval misconfigured
+
 ## Security Considerations
 
 - **Production deployment**: Use HTTPS with valid SSL certificate
@@ -264,6 +350,8 @@ tail -f /var/log/nanohub/webhook.log
 - **Credentials**: Store credentials in environment file with restricted permissions
 - **Firewall**: Restrict Flask API to localhost only
 - **Database**: Use read-only database user for analyzer queries
+- **Agent security**: Secure HTTP repository with authentication
+- **Command validation**: Validate commands before execution on devices
 
 ## Development
 
@@ -287,6 +375,11 @@ curl -X POST http://localhost:9006/api/device-search \
 curl -X POST http://localhost:9006/api/device-info \
   -H "Content-Type: application/json" \
   -d '{"type":"uuid","value":"12345678-1234-1234-1234-123456789012"}'
+
+# Test wake device
+curl -X POST http://localhost:9006/api/wake-device \
+  -H "Content-Type: application/json" \
+  -d '{"udid":"12345678-1234-1234-1234-123456789012"}'
 ```
 
 ## Contributing
@@ -301,7 +394,7 @@ curl -X POST http://localhost:9006/api/device-info \
 
 MIT License
 
-Copyright (c) 2025 [Your Name]
+Copyright (c) 2025
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -326,4 +419,4 @@ SOFTWARE.
 - Built for NanoHUB by micromdm
 - Uses Flask web framework
 - Frontend with vanilla JavaScript (no frameworks)
-
+- mdmagent custom agent for advanced device management
