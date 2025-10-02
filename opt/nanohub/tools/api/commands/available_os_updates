@@ -1,0 +1,74 @@
+#!/bin/bash
+# NanoHUB Available OS Updates
+# Usage: ./available_os_updates.sh <UDID>
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <UDID>"
+    echo "Example: $0 00008020-0001713C1E90003A"
+    exit 1
+fi
+
+UDID="$1"
+
+# Load environment variables
+if [ -f ~/nanohub/environment.sh ]; then
+    source ~/nanohub/environment.sh
+else
+    echo "Error: environment.sh not found"
+    exit 1
+fi
+
+# Validate required variables
+if [ -z "$NANOMDM_USER" ] || [ -z "$NANOMDM_API_KEY" ] || [ -z "$NANOMDM_URL" ]; then
+    echo "Error: Missing required environment variables (NANOMDM_USER, NANOMDM_API_KEY, NANOMDM_URL)"
+    exit 1
+fi
+
+echo "[INFO] Checking available OS updates for device: $UDID"
+
+CMD_UUID=$(uuidgen)
+
+cat > /tmp/cmd.plist << 'PLIST_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>AvailableOSUpdates</string>
+    </dict>
+    <key>CommandUUID</key>
+    <string>CMD_UUID_PLACEHOLDER</string>
+</dict>
+</plist>
+PLIST_EOF
+
+sed -i "s/CMD_UUID_PLACEHOLDER/$CMD_UUID/g" /tmp/cmd.plist
+
+echo "[INFO] Sending AvailableOSUpdates command..."
+echo "Command UUID: $CMD_UUID"
+
+RESPONSE=$(curl -s -T /tmp/cmd.plist \
+  -u "${NANOMDM_USER}:${NANOMDM_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "${NANOMDM_URL}/api/v1/nanomdm/enqueue/$UDID")
+
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+rm -f /tmp/cmd.plist
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "[OK] AvailableOSUpdates command sent successfully!"
+    if [ -n "$BODY" ] && [ "$BODY" != "{}" ]; then
+        echo "Response: $BODY"
+    fi
+    echo ""
+    echo "[INFO] Command UUID: $CMD_UUID"
+    echo "[INFO] Check webhook logs for detailed update information"
+else
+    echo "[ERROR] Failed to send command (HTTP: $HTTP_CODE)"
+    [ -n "$BODY" ] && echo "Error: $BODY"
+    exit 1
+fi

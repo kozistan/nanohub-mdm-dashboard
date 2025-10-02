@@ -1,0 +1,49 @@
+#!/bin/bash
+# NanoHUB DeviceInformation
+
+# Load environment variables
+if [ -f ~/nanohub/environment.sh ]; then
+    source ~/nanohub/environment.sh
+else
+    echo "Error: environment.sh not found"
+    exit 1
+fi
+
+# Validate required variables
+if [ -z "$NANOMDM_USER" ] || [ -z "$NANOMDM_API_KEY" ] || [ -z "$NANOMDM_URL" ]; then
+    echo "Error: Missing required environment variables"
+    exit 1
+fi
+
+CMD_UUID=$(uuidgen)
+
+cat > /tmp/cmd.plist << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>DeviceInformation</string>
+        <key>Queries</key>
+        <array>
+            <string>UDID</string>
+            <string>DeviceName</string>
+            <string>OSVersion</string>
+            <string>SerialNumber</string>
+        </array>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
+curl -T /tmp/cmd.plist \
+  -u "${NANOMDM_USER}:${NANOMDM_API_KEY}" \
+  "${NANOMDM_URL}/api/v1/nanomdm/enqueue/$1"
+
+echo ""
+echo "[INFO] Command UUID: $CMD_UUID"
+echo "[INFO] Check webhook logs for current update status details"

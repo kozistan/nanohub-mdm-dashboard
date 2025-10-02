@@ -1,0 +1,20 @@
+# NanoHUB Environment Configuration
+export NANOHUB_URL="http://localhost:9004"
+export MDM_SERVER="mdm.yourdomain.com"
+
+# NanoMDM API Configuration
+export NANOMDM_USER="nanohub"
+export NANOMDM_API_KEY="your_api_key_here"
+
+# Command Repository Configuration
+export REPO_SERVER_URL="https://repo.yourdomain.com"
+export REMOTE_HOST="user@server.yourdomain.com"
+export REPO_AUTH_USER="repouser"
+export REPO_AUTH_PASS="your_password_here"
+export COMMANDS_DIR="/Users/Shared/munki_repo/commands"
+
+# Database Configuration
+export DB_HOST="localhost"
+export DB_USER="nanohub"
+export DB_PASS="your_db_password"
+export DB_NAME="nanohub"

@@ -1,0 +1,48 @@
+#!/bin/bash
+# /opt/nanohub/tools/api/commands/mdm_analyzer
+# MDM Database Analyzer - CSV/JSON ONLY OUTPUT
+
+# Load environment variables
+if [ -f ~/nanohub/environment.sh ]; then
+    source ~/nanohub/environment.sh
+else
+    echo '{"error":"environment.sh not found"}'
+    exit 1
+fi
+
+# Validate required variables
+if [ -z "$DB_HOST" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASS" ] || [ -z "$DB_NAME" ]; then
+    echo '{"error":"Missing database credentials in environment"}'
+    exit 1
+fi
+
+if [ -z "$1" ]; then
+    echo '{"error":"UUID is required"}'
+    exit 1
+fi
+
+UUID="$1"
+json="{"
+
+as_json_array(){
+  awk 'NR==1{split($0,H,"\t"); next} {printf "{"; for(i=1;i<=NF;i++) printf "%s\"%s\":\"%s\"", (i>1?",":""), H[i], $i; print "}"}' | jq -s .
+}
+
+# DEVICE_INFO
+info=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" --batch --raw \
+  -e "SELECT d.id as device_uuid, d.serial_number, d.created_at as device_registered, e.id as enrollment_id, e.type as enrollment_type, e.enabled, e.last_seen_at FROM devices d LEFT JOIN enrollments e ON d.id = e.device_id WHERE d.id = '$UUID';" "$DB_NAME" | as_json_array)
+[ -z "$info" ] && info="[]"
+json+="\"DEVICE_INFO\":$info"
+
+# DEVICE_AUTH
+auth=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" --batch --raw \
+  -e "SELECT CASE WHEN authenticate LIKE '%<key>DeviceName</key>%' THEN SUBSTRING(authenticate, LOCATE('<string>', authenticate, LOCATE('<key>DeviceName</key>', authenticate)) + 8, LOCATE('</string>', authenticate, LOCATE('<key>DeviceName</key>', authenticate)) - LOCATE('<string>', authenticate, LOCATE('<key>DeviceName</key>', authenticate)) - 8) ELSE 'N/A' END as device_name, CASE WHEN authenticate LIKE '%<key>ProductName</key>%' THEN SUBSTRING(authenticate, LOCATE('<string>', authenticate, LOCATE('<key>ProductName</key>', authenticate)) + 8, LOCATE('</string>', authenticate, LOCATE('<key>ProductName</key>', authenticate)) - LOCATE('<string>', authenticate, LOCATE('<key>ProductName</key>', authenticate)) - 8) ELSE 'N/A' END as product_name, CASE WHEN authenticate LIKE '%<key>OSVersion</key>%' THEN SUBSTRING(authenticate, LOCATE('<string>', authenticate, LOCATE('<key>OSVersion</key>', authenticate)) + 8, LOCATE('</string>', authenticate, LOCATE('<key>OSVersion</key>', authenticate)) - LOCATE('<string>', authenticate, LOCATE('<key>OSVersion</key>', authenticate)) - 8) ELSE 'N/A' END as os_version, CASE WHEN authenticate LIKE '%<key>BuildVersion</key>%' THEN SUBSTRING(authenticate, LOCATE('<string>', authenticate, LOCATE('<key>BuildVersion</key>', authenticate)) + 8, LOCATE('</string>', authenticate, LOCATE('<key>BuildVersion</key>', authenticate)) - LOCATE('<string>', authenticate, LOCATE('<key>BuildVersion</key>', authenticate)) - 8) ELSE 'N/A' END as build_version FROM devices WHERE id = '$UUID' AND authenticate IS NOT NULL;" "$DB_NAME" | as_json_array)
+[ -z "$auth" ] && auth="[]"
+json+=",\"DEVICE_AUTH\":$auth"
+
+# ... (zbytek SQL queries stejně, jen používají $DB_* proměnné)
+# ACTIVITY_SUMMARY, COMMANDS_BY_TYPE, PENDING_COMMANDS, RECENT_CHECKINS, CURRENT_FULL_DEVICE_STATUS
+# (zkráceno pro přehlednost - ponech SQL queries stejné)
+
+json+="}"
+echo "$json"

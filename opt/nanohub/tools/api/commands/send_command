@@ -1,0 +1,203 @@
+#!/bin/bash
+
+# HTTP Command Sender for NanoHUB Custom Agent
+# Usage: ./send_command <device_udid> <command_type> <value> [parameter]
+
+set -e
+
+# Load NanoHUB environment
+if [ -f ~/nanohub/environment.sh ]; then
+    source ~/nanohub/environment.sh
+else
+    echo "Error: environment.sh not found"
+    exit 1
+fi
+
+# Validate required environment variables
+if [ -z "$REPO_SERVER_URL" ] || [ -z "$REMOTE_HOST" ] || [ -z "$REPO_AUTH_USER" ] || [ -z "$REPO_AUTH_PASS" ]; then
+    echo "Error: Missing required environment variables"
+    echo "Required: REPO_SERVER_URL, REMOTE_HOST, REPO_AUTH_USER, REPO_AUTH_PASS, COMMANDS_DIR"
+    exit 1
+fi
+
+# Configuration from environment
+SERVER_URL="${REPO_SERVER_URL}"
+COMMANDS_DIR="${COMMANDS_DIR:-/Users/Shared/munki_repo/commands}"
+REMOTE_HOST="${REMOTE_HOST}"
+AUTH_USER="${REPO_AUTH_USER}"
+AUTH_PASS="${REPO_AUTH_PASS}"
+
+# Validate arguments
+if [ $# -lt 3 ]; then
+    echo "Usage: $0 <device_udid> <command_type> <value> [parameter]"
+    echo ""
+    echo "BASIC COMMANDS:"
+    echo "  $0 UDID test 'Hello World'"
+    echo "  $0 UDID hostname 'new-mac-name'"
+    echo "  $0 UDID shell 'brew install git'"
+    echo "  $0 UDID shell 'pmset schedule wake \"10/02/25 14:30:00\"'"
+    echo ""
+    echo "USER MANAGEMENT:"
+    echo "  $0 UDID createuser 'john' 'admin|SecurePassword123'"
+    echo "  $0 UDID createuser 'jane' 'standard|UserPassword456'"
+    echo "  $0 UDID disableuser 'john'"
+    echo "  $0 UDID enableuser 'john'"
+    echo "  $0 UDID removeuser 'john'"
+    echo "  $0 UDID setpassword 'john' 'NewPassword789'"
+    echo ""
+    echo "SUPPORTED COMMAND TYPES:"
+    echo "  test        - Test connectivity and agent response"
+    echo "  hostname    - Change computer hostname"
+    echo "  shell       - Execute shell commands"
+    echo "  createuser  - Create new user (admin|password or standard|password)"
+    echo "  disableuser - Disable existing user account"
+    echo "  enableuser  - Enable disabled user account"
+    echo "  removeuser  - Remove user account"
+    echo "  setpassword - Set user password"
+    echo ""
+    echo "NOTES:"
+    echo "  - Agent polls every 5 seconds for new commands"
+    echo "  - Results are sent to webhook: /webhook/command-result"
+    echo "  - Monitor logs: tail -f /var/log/mdmagent.log (on device)"
+    exit 1
+fi
+
+DEVICE_UDID="$1"
+COMMAND_TYPE="$2"
+COMMAND_VALUE="$3"
+COMMAND_PARAMETER="${4:-}"
+
+# Validate UDID format
+if [[ ! "$DEVICE_UDID" =~ ^[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}$ ]]; then
+    echo "Error: Invalid UDID format: $DEVICE_UDID"
+    exit 1
+fi
+
+# Check and clean processed commands
+check_processed_commands() {
+    local device_udid="$1"
+    local processed_file="$COMMANDS_DIR/$device_udid.json.processed"
+
+    if ssh "$REMOTE_HOST" "test -f $processed_file" 2>/dev/null; then
+        echo "Cleaning processed commands..."
+        ssh "$REMOTE_HOST" "rm -f $COMMANDS_DIR/$device_udid.json $processed_file"
+    fi
+}
+
+echo "Sending $COMMAND_TYPE command to device $DEVICE_UDID..."
+
+check_processed_commands "$DEVICE_UDID"
+
+# Create command JSON
+create_command_json() {
+    local type="$1"
+    local value="$2"
+    local parameter="$3"
+
+    if [ -n "$parameter" ]; then
+        cat << EOF
+{
+    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+    "nanohub_server": "$NANOHUB_URL",
+    "mdm_server": "$MDM_SERVER",
+    "commands": [
+        {
+            "type": "$type",
+            "value": "$value",
+            "parameter": "$parameter"
+        }
+    ]
+}
+EOF
+    else
+        cat << EOF
+{
+    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+    "nanohub_server": "$NANOHUB_URL",
+    "mdm_server": "$MDM_SERVER",
+    "commands": [
+        {
+            "type": "$type",
+            "value": "$value"
+        }
+    ]
+}
+EOF
+    fi
+}
+
+TEMP_FILE="/tmp/.nanohub_command_$DEVICE_UDID.json.tmp"
+REMOTE_COMMAND_FILE="$COMMANDS_DIR/$DEVICE_UDID.json"
+
+# Check if remote command file exists
+REMOTE_EXISTS=$(ssh "$REMOTE_HOST" "test -f $REMOTE_COMMAND_FILE && echo 'true' || echo 'false'" 2>/dev/null)
+
+if [ "$REMOTE_EXISTS" = "true" ]; then
+    echo "Device has pending commands. Merging new command..."
+
+    ssh "$REMOTE_HOST" "cp $REMOTE_COMMAND_FILE /tmp/existing_$DEVICE_UDID.json && chown \$(whoami) /tmp/existing_$DEVICE_UDID.json"
+    scp "$REMOTE_HOST:/tmp/existing_$DEVICE_UDID.json" "/tmp/existing_$DEVICE_UDID.json"
+    ssh "$REMOTE_HOST" "rm -f /tmp/existing_$DEVICE_UDID.json"
+    EXISTING_COMMANDS=$(cat "/tmp/existing_$DEVICE_UDID.json")
+
+    NEW_COMMAND_JSON=$(create_command_json "$COMMAND_TYPE" "$COMMAND_VALUE" "$COMMAND_PARAMETER")
+
+    python3 << EOF > "$TEMP_FILE"
+import json
+existing = json.loads('''$EXISTING_COMMANDS''')
+new_cmd = json.loads('''$NEW_COMMAND_JSON''')
+
+if 'commands' not in existing:
+    existing['commands'] = []
+
+existing['commands'] = new_cmd['commands']
+existing['timestamp'] = new_cmd['timestamp']
+existing['nanohub_server'] = new_cmd['nanohub_server']
+existing['mdm_server'] = new_cmd['mdm_server']
+
+print(json.dumps(existing, indent=2))
+EOF
+
+    rm -f "/tmp/existing_$DEVICE_UDID.json"
+else
+    echo "Creating new command file for device..."
+    create_command_json "$COMMAND_TYPE" "$COMMAND_VALUE" "$COMMAND_PARAMETER" > "$TEMP_FILE"
+fi
+
+echo "Uploading command to server..."
+REMOTE_TEMP_FILE="/tmp/nanohub_command_$DEVICE_UDID.json"
+
+scp "$TEMP_FILE" "$REMOTE_HOST:$REMOTE_TEMP_FILE"
+ssh "$REMOTE_HOST" "mv $REMOTE_TEMP_FILE $REMOTE_COMMAND_FILE && chmod 664 $REMOTE_COMMAND_FILE"
+
+rm -f "$TEMP_FILE"
+
+echo "Command queued successfully!"
+echo ""
+echo "Command details:"
+echo "   Device: $DEVICE_UDID"
+echo "   Type: $COMMAND_TYPE"
+echo "   Value: $COMMAND_VALUE"
+[ -n "$COMMAND_PARAMETER" ] && echo "   Parameter: $COMMAND_PARAMETER"
+echo ""
+echo "Remote command file: $REMOTE_COMMAND_FILE"
+echo "HTTP endpoint: $SERVER_URL/commands/$DEVICE_UDID.json"
+echo ""
+echo "Agent will poll for commands every 5 seconds"
+echo "Monitor execution: tail -f /var/log/mdmagent.log (on device)"
+
+echo "Validating JSON syntax..."
+if ! ssh "$REMOTE_HOST" "python3 -m json.tool $REMOTE_COMMAND_FILE >/dev/null 2>&1"; then
+    echo "Error: Invalid JSON generated on remote server!"
+    ssh "$REMOTE_HOST" "cat $REMOTE_COMMAND_FILE"
+    exit 1
+fi
+
+echo ""
+echo "Command delivery completed!"
+echo ""
+echo "To check pending commands:"
+echo "   curl -s -u '\$REPO_AUTH_USER:\$REPO_AUTH_PASS' \$REPO_SERVER_URL/commands/$DEVICE_UDID.json | jq ."
+echo ""
+echo "To clear pending commands:"
+echo "   ssh \$REMOTE_HOST 'rm -f $REMOTE_COMMAND_FILE'"
