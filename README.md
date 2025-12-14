@@ -41,6 +41,14 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Audit Logging**: Complete audit trail for all admin actions
 - **Bulk Operations**: Execute commands on multiple devices simultaneously
 
+## Screenshots
+
+### Main Dashboard
+![Main Dashboard](screenshots/01_main_dashboard.png)
+
+### Admin Panel
+![Admin Panel](screenshots/02_admin_panel.png)
+
 ## Architecture
 
 ```
