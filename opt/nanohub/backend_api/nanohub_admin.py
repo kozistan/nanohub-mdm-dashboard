@@ -301,6 +301,56 @@ def execute_command(cmd_id, params, user_info):
     elif cmd_id == 'bulk_new_device_installation':
         return execute_bulk_new_device_installation(params, user_info)
 
+    # Special handling for bulk_schedule_os_update - uses platform-specific flags
+    elif cmd_id == 'bulk_schedule_os_update':
+        action = params.get('action')
+        if not action:
+            return {'success': False, 'error': 'Missing required parameter: action'}
+        args.append(sanitize_param(action))
+        # Add selected devices (if any)
+        devices = params.get('devices')
+        if devices:
+            # devices can be a list or comma-separated string
+            if isinstance(devices, list):
+                device_list = [sanitize_param(d.strip()) for d in devices if d and d.strip()]
+            else:
+                device_list = [sanitize_param(d.strip()) for d in devices.split(',') if d.strip()]
+            if device_list:
+                args.extend(['--devices', ','.join(device_list)])
+        # Add filter options
+        if params.get('manifest'):
+            args.extend(['--manifest', sanitize_param(params['manifest'])])
+        if params.get('account_filter'):
+            args.extend(['--account', sanitize_param(params['account_filter'])])
+        if params.get('os_filter'):
+            if params['os_filter'] == 'ios':
+                args.append('--only-ios')
+            elif params['os_filter'] == 'macos':
+                args.append('--only-macos')
+        # Add iOS specific options
+        if params.get('ios_key'):
+            args.extend(['--ios-key', sanitize_param(params['ios_key'])])
+        if params.get('ios_version'):
+            args.extend(['--ios-version', sanitize_param(params['ios_version'])])
+        if params.get('ios_deferrals'):
+            args.extend(['--ios-deferrals', sanitize_param(params['ios_deferrals'])])
+        if params.get('ios_priority'):
+            args.extend(['--ios-priority', sanitize_param(params['ios_priority'])])
+        # Add macOS specific options
+        if params.get('macos_key'):
+            args.extend(['--macos-key', sanitize_param(params['macos_key'])])
+        if params.get('macos_version'):
+            args.extend(['--macos-version', sanitize_param(params['macos_version'])])
+        if params.get('macos_deferrals'):
+            args.extend(['--macos-deferrals', sanitize_param(params['macos_deferrals'])])
+        if params.get('macos_priority'):
+            args.extend(['--macos-priority', sanitize_param(params['macos_priority'])])
+        # Dry run option
+        if params.get('dry_run'):
+            args.append('--dry-run')
+        # Auto-confirm for non-interactive execution
+        args.append('--yes')
+
     # Default parameter handling
     else:
         for param_def in cmd.get('parameters', []):
@@ -2162,7 +2212,9 @@ def admin_execute():
         return jsonify({'success': False, 'error': 'Insufficient permissions'})
 
     # Check for bulk operation
-    if 'devices' in params and isinstance(params.get('devices'), list):
+    # Some commands handle device iteration internally (native bulk commands)
+    native_bulk_commands = ['bulk_schedule_os_update', 'bulk_new_device_installation']
+    if 'devices' in params and isinstance(params.get('devices'), list) and cmd_id not in native_bulk_commands:
         results = execute_bulk_command(cmd_id, params['devices'], params, user)
         return jsonify({'success': True, 'results': results})
 
