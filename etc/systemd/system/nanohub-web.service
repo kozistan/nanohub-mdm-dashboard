@@ -1,0 +1,17 @@
+[Unit]
+Description=NanoHUB Web Frontend with LDAP Authentication
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=nanohub
+Group=nanohub
+WorkingDirectory=/opt/nanohub/backend_api
+Environment=PATH=/opt/nanohub/venv/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-/opt/nanohub/backend_api/nanohub_environment
+ExecStart=/opt/nanohub/venv/bin/python3 /opt/nanohub/backend_api/nanohub_web.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

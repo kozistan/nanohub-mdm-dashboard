@@ -1,0 +1,47 @@
+# NanoHUB Environment Configuration
+# Copy this file to nanohub_environment and configure for your environment
+# IMPORTANT: Set permissions to 600 (chmod 600 nanohub_environment)
+
+# =============================================================================
+# LDAP Configuration (Active Directory)
+# =============================================================================
+LDAP_HOST=dc01.example.com
+LDAP_HOST_FAILOVER=dc02.example.com
+LDAP_BIND_DN=CN=ldapadmin,OU=Admins,DC=example,DC=com
+LDAP_BIND_PASSWORD=your_ldap_password_here
+LDAP_BASE_DN=DC=example,DC=com
+
+# =============================================================================
+# Database Configuration (MySQL/MariaDB)
+# =============================================================================
+DB_HOST=localhost
+DB_USER=nanohub
+DB_PASSWORD=your_db_password_here
+DB_NAME=nanohub
+
+# =============================================================================
+# Flask Configuration
+# =============================================================================
+# IMPORTANT: Change this to a random string in production!
+FLASK_SECRET_KEY=change-this-to-random-string-in-production
+
+# =============================================================================
+# Paths Configuration
+# =============================================================================
+DASHBOARD_INDEX_PATH=/var/www/mdm-web/index.html
+PROFILES_DIR=/opt/nanohub/profiles/
+WIREGUARD_PROFILES_DIR=/opt/nanohub/profiles/wireguard_configs/
+COMMANDS_DIR=/opt/nanohub/tools/api/commands
+
+# =============================================================================
+# NanoMDM Configuration
+# =============================================================================
+NANOMDM_URL=http://localhost:9004
+NANOMDM_USER=nanohub
+NANOMDM_API_KEY=your_nanomdm_api_key_here
+
+# =============================================================================
+# Logging
+# =============================================================================
+AUDIT_LOG_PATH=/var/log/nanohub/admin_audit.log
+WEBHOOK_LOG_PATH=/var/log/nanohub/webhook.log

@@ -57,6 +57,8 @@ Thumbs.db
 *.pem
 *.key
 *.crt
+nanohub_environment
+*.env
 
 # Device data
 devices.json
