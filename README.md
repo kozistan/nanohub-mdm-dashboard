@@ -49,6 +49,9 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 ### Admin Panel
 ![Admin Panel](screenshots/02_admin_panel.png)
 
+### Profile_list command on Admin Panel
+![command](screenshots/03_profile_list_command.png)
+
 ## Architecture
 
 ```
