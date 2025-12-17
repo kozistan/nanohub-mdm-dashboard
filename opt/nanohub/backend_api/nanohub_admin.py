@@ -19,6 +19,9 @@ from command_registry import (
     COMMANDS, CATEGORIES, COMMANDS_DIR, PROFILE_DIRS,
     get_commands_by_category, get_command, get_available_profiles, check_role_permission
 )
+from web_config import (
+    get_munki_profile, get_profile_list, get_app_manifest, get_value
+)
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -36,12 +39,12 @@ admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 # Thread pool for parallel execution
 executor = ThreadPoolExecutor(max_workers=10)
 
-# Database configuration - use environment variables in production
+# Database configuration (same as main API)
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'user': os.getenv('DB_USER', 'nanohub'),
-    'password': os.getenv('DB_PASSWORD', 'your_db_password_here'),
-    'database': os.getenv('DB_NAME', 'nanohub')
+    'host': '127.0.0.1',
+    'user': 'nanohub',
+    'password': 'YOUR_DATABASE_PASSWORD',
+    'database': 'nanohub'
 }
 
 
@@ -250,7 +253,8 @@ def execute_command(cmd_id, params, user_info):
     # Determine script directory (use custom if specified)
     script_dir = cmd.get('script_dir', COMMANDS_DIR)
     script_path = os.path.join(script_dir, cmd['script'])
-    if not os.path.exists(script_path):
+    # Skip script existence check for internal commands (start with '_internal')
+    if not cmd['script'].startswith('_internal') and not os.path.exists(script_path):
         return {'success': False, 'error': f'Script not found: {cmd["script"]}'}
 
     # Build command arguments
@@ -351,6 +355,14 @@ def execute_command(cmd_id, params, user_info):
         # Auto-confirm for non-interactive execution
         args.append('--yes')
 
+    # Special handling for bulk_install_application - iterate over devices and call install_application
+    elif cmd_id == 'bulk_install_application':
+        return execute_bulk_install_application(params, user_info)
+
+    # Special handling for bulk_remote_desktop - enable/disable RD on all macOS devices
+    elif cmd_id == 'bulk_remote_desktop':
+        return execute_bulk_remote_desktop(params, user_info)
+
     # Default parameter handling
     else:
         for param_def in cmd.get('parameters', []):
@@ -385,7 +397,7 @@ def execute_command(cmd_id, params, user_info):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=120,
+            timeout=300,  # Extended for bulk operations
             cwd=script_dir,
             env=env
         )
@@ -432,7 +444,7 @@ def execute_command(cmd_id, params, user_info):
             result='Command timed out',
             success=False
         )
-        return {'success': False, 'error': 'Command timed out after 120 seconds'}
+        return {'success': False, 'error': 'Command timed out after 300 seconds'}
 
     except Exception as e:
         logger.error(f"Command execution failed: {e}")
@@ -977,51 +989,56 @@ def execute_bulk_new_device_installation(params, user_info):
         output_lines.append("\n[PHASE 1] Installing base profiles...")
 
         # Common profiles for both branches
-        install_profile('org.example.macos.appleRoot.profile.signed.mobileconfig')
-        install_profile('org.example.macos.Root.profile.signed.mobileconfig')
-        install_profile('org.example.macos.EnergySaver.profile.signed.mobileconfig')
+        install_profile('company.macos.appleRoot.profile.signed.mobileconfig')
+        install_profile('company.macos.Root.profile.signed.mobileconfig')
+        install_profile('company.macos.EnergySaver.profile.signed.mobileconfig')
 
         output_lines.append("\n[PHASE 2] Installing Munki profile...")
 
-        # Munki profile selection based on munki_type (supports both old and new format)
-        # Old format: 'default'/'tech' with branch determining bel- prefix
-        # New format: 'default'/'tech'/'bel-default'/'bel-tech' explicit selection
-        if munki_type == 'bel-default':
-            install_profile('org.example.macos.Munki-Bel-Default.profile.signed.mobileconfig')
-        elif munki_type == 'bel-tech':
-            install_profile('org.example.macos.Munki-Bel-Tech.profile.signed.mobileconfig')
-        elif branch == 'main_office':
+        # Munki profile selection based on munki_type (loaded from web_environment.sh)
+        # Get profile from config mapping
+        munki_profile = get_munki_profile(munki_type)
+
+        if munki_profile:
+            install_profile(munki_profile)
+        elif branch == 'karlin':
+            # Fallback for old format: 'default'/'tech' with branch determining profile
             if munki_type == 'tech':
-                install_profile('org.example.macos.Munki-Tech.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('tech') or 'company.macos.Munki-Tech.profile.signed.mobileconfig')
             else:
-                install_profile('org.example.macos.Munki-Default.profile.signed.mobileconfig')
-            install_profile('org.example.macos.SSO.Drive.profile.signed.mobileconfig')
-        else:  # branch_office with default/tech
+                install_profile(get_munki_profile('default') or 'company.macos.Munki-Default.profile.signed.mobileconfig')
+        else:  # belehradska with default/tech (fallback)
             if munki_type == 'tech':
-                install_profile('org.example.macos.Munki-Bel-Tech.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('bel-tech') or 'company.macos.Munki-Bel-Tech.profile.signed.mobileconfig')
             else:
-                install_profile('org.example.macos.Munki-Bel-Default.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('bel-default') or 'company.macos.Munki-Bel-Default.profile.signed.mobileconfig')
+
+        # Karlin-specific SSO profile
+        if branch == 'karlin':
+            karlin_sso = get_value('KARLIN_SSO_PROFILE')
+            if karlin_sso:
+                install_profile(karlin_sso)
 
         output_lines.append("\n[PHASE 3] Installing security profiles...")
 
         # Common profiles continued
-        install_profile('org.example.macos.Restrictions.profile.signed.mobileconfig')
-        install_profile('org.example.macos.Account-Disabled.profile.signed.mobileconfig')
-        install_profile('org.example.macos.Firewall.profile.signed.mobileconfig')
+        install_profile('company.macos.Restrictions.profile.signed.mobileconfig')
+        install_profile('company.macos.Account-Disabled.profile.signed.mobileconfig')
+        install_profile('company.macos.Firewall.profile.signed.mobileconfig')
 
         output_lines.append("\n[PHASE 4] Installing applications...")
 
         # Applications
-        install_application('https://repo.example.com/munki/mdmagent.plist')
-        install_application('https://repo.example.com/munki/munki.plist')
+        install_application('https://repo.example.com/munki/company_mdmagent.plist')
+        install_application('https://repo.example.com/munki/company_munki.plist')
 
-        # Branch-specific applications for main_office
-        if branch == 'main_office':
-            install_application('https://repo.example.com/munki/drivemap.plist')
-            install_application('https://repo.example.com/munki/removeadmin_manifest.plist')
+        # Branch-specific applications for Karlin
+        if branch == 'karlin':
+            install_application('https://repo.example.com/munki/company_drivemap.plist')
+            install_application('https://repo.example.com/munki/company_removeadmin_manifest.plist')
 
-        # Directory Services (main_office only, if hostname provided)
-        if branch == 'main_office' and hostname:
+        # Directory Services (Karlin only, if hostname provided)
+        if branch == 'karlin' and hostname:
             output_lines.append("\n[PHASE 5] Setting up Directory Services...")
 
             # Set hostname first
@@ -1034,16 +1051,16 @@ def execute_bulk_new_device_installation(params, user_info):
             time.sleep(WAIT_INTERVAL)
 
             # Install Directory Services profile
-            install_profile('org.example.macos.DirectoryServices.profile.signed.mobileconfig')
+            install_profile('company.macos.DirectoryServices.profile.signed.mobileconfig')
 
         # FileVault profile
         if install_filevault == 'yes':
             output_lines.append("\n[PHASE 6] Installing FileVault profile...")
             output_lines.append("NOTE: Client (not admin) should be logged in for FileVault!")
-            install_profile('org.example.macos.Filevault.profile.signed.mobileconfig')
+            install_profile('company.macos.Filevault.profile.signed.mobileconfig')
 
-        # WireGuard profile (main_office only)
-        if branch == 'main_office' and install_wireguard == 'yes' and hostname:
+        # WireGuard profile (Karlin only)
+        if branch == 'karlin' and install_wireguard == 'yes' and hostname:
             output_lines.append("\n[PHASE 7] Installing WireGuard profile...")
 
             # Search for WireGuard profile
@@ -1068,10 +1085,10 @@ def execute_bulk_new_device_installation(params, user_info):
     elif platform == 'ios':
         output_lines.append("\n[PHASE 1] Installing iOS profiles...")
 
-        install_profile('org.example.ios.appleRoot.profile.signed.mobileconfig')
-        install_profile('org.example.ios.Account-Disabled.profile.signed.mobileconfig')
-        install_profile('org.example.ios.Restrictions.profile.signed.mobileconfig')
-        install_profile('org.example.ios.whitelist.signed.mobileconfig')
+        install_profile('company.ios.appleRoot.profile.signed.mobileconfig')
+        install_profile('company.ios.Account-Disabled.profile.signed.mobileconfig')
+        install_profile('company.ios.Restrictions.profile.signed.mobileconfig')
+        install_profile('company.ios.whitelist.signed.mobileconfig')
 
     # Summary
     output_lines.append("\n" + "=" * 60)
@@ -1096,6 +1113,254 @@ def execute_bulk_new_device_installation(params, user_info):
         command='bulk_new_device_installation',
         params=params,
         result=f"Installed {commands_executed} commands, {len(errors)} errors",
+        success=len(errors) == 0
+    )
+
+    return {
+        'success': len(errors) == 0,
+        'output': '\n'.join(output_lines),
+        'errors': errors if errors else None
+    }
+
+
+def execute_bulk_install_application(params, user_info):
+    """Execute bulk application installation - iterates over devices and calls install_application"""
+    import time
+
+    devices = params.get('devices', [])
+    manifest_url = sanitize_param(params.get('manifest_url', ''))
+
+    if not devices:
+        return {'success': False, 'error': 'No devices selected'}
+    if not manifest_url:
+        return {'success': False, 'error': 'Missing required parameter: manifest_url'}
+
+    # Ensure devices is a list
+    if isinstance(devices, str):
+        devices = [d.strip() for d in devices.split(',') if d.strip()]
+
+    output_lines = []
+    errors = []
+    success_count = 0
+    WAIT_INTERVAL = 2  # seconds between commands
+
+    install_script = os.path.join(COMMANDS_DIR, 'install_application')
+
+    output_lines.append("=" * 60)
+    output_lines.append("BULK APPLICATION INSTALLATION")
+    output_lines.append("=" * 60)
+    output_lines.append(f"Manifest URL: {manifest_url}")
+    output_lines.append(f"Target devices: {len(devices)}")
+    output_lines.append("")
+
+    for i, udid in enumerate(devices, 1):
+        udid = sanitize_param(udid)
+        output_lines.append(f"[{i}/{len(devices)}] Installing on device: {udid}")
+
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+            result = subprocess.run(
+                [install_script, udid, manifest_url],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                cwd=COMMANDS_DIR,
+                env=env
+            )
+
+            if result.returncode == 0:
+                output_lines.append(f"  [OK] Installation command sent")
+                success_count += 1
+            else:
+                error_msg = result.stderr.strip() if result.stderr else 'Command failed'
+                output_lines.append(f"  [ERROR] {error_msg}")
+                errors.append(f"{udid}: {error_msg}")
+
+        except subprocess.TimeoutExpired:
+            output_lines.append(f"  [ERROR] Command timed out")
+            errors.append(f"{udid}: Timeout")
+        except Exception as e:
+            output_lines.append(f"  [ERROR] {str(e)}")
+            errors.append(f"{udid}: {str(e)}")
+
+        # Delay between devices (except last one)
+        if i < len(devices):
+            time.sleep(WAIT_INTERVAL)
+
+    output_lines.append("")
+    output_lines.append("=" * 60)
+    output_lines.append("BULK INSTALLATION COMPLETE")
+    output_lines.append("=" * 60)
+    output_lines.append(f"Successful: {success_count}/{len(devices)}")
+    output_lines.append(f"Failed: {len(errors)}")
+
+    if errors:
+        output_lines.append("")
+        output_lines.append("Failed devices:")
+        for err in errors:
+            output_lines.append(f"  - {err}")
+
+    # Audit log
+    audit_log(
+        user=user_info.get('username'),
+        action='bulk_install_application',
+        command='bulk_install_application',
+        params={'devices_count': len(devices), 'manifest_url': manifest_url},
+        result=f"Installed on {success_count}/{len(devices)} devices",
+        success=len(errors) == 0
+    )
+
+    return {
+        'success': len(errors) == 0,
+        'output': '\n'.join(output_lines),
+        'errors': errors if errors else None
+    }
+
+
+def execute_bulk_remote_desktop(params, user_info):
+    """Execute bulk remote desktop enable/disable on selected or all macOS devices"""
+    import mysql.connector
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    action = params.get('action')
+    selected_devices = params.get('devices')
+    manifest_filter = params.get('manifest')
+
+    if not action or action not in ['enable', 'disable']:
+        return {'success': False, 'error': 'Missing or invalid action. Use "enable" or "disable"'}
+
+    output_lines = []
+    errors = []
+
+    output_lines.append("=" * 60)
+    output_lines.append(f"BULK REMOTE DESKTOP - {action.upper()}")
+    output_lines.append("=" * 60)
+
+    # Normalize selected_devices to list
+    if selected_devices:
+        if isinstance(selected_devices, str):
+            selected_devices = [d.strip() for d in selected_devices.split(',') if d.strip()]
+        elif isinstance(selected_devices, list):
+            selected_devices = [d.strip() for d in selected_devices if d and str(d).strip()]
+
+    # Get devices from database
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+
+        if selected_devices and len(selected_devices) > 0:
+            # Use selected devices (must be macOS)
+            placeholders = ','.join(['%s'] * len(selected_devices))
+            sql = f"SELECT uuid, hostname FROM device_inventory WHERE uuid IN ({placeholders}) AND os='macos' ORDER BY hostname"
+            cursor.execute(sql, selected_devices)
+            output_lines.append(f"Selected devices: {len(selected_devices)}")
+        else:
+            # Build SQL query with filters - all macOS devices
+            sql = "SELECT uuid, hostname FROM device_inventory WHERE os='macos'"
+            sql_params = []
+
+            if manifest_filter:
+                sql += " AND manifest = %s"
+                sql_params.append(manifest_filter)
+                output_lines.append(f"Manifest filter: {manifest_filter}")
+
+            sql += " ORDER BY hostname"
+            cursor.execute(sql, sql_params)
+
+        devices = cursor.fetchall()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        return {'success': False, 'error': f'Database error: {str(e)}'}
+
+    if not devices:
+        return {'success': False, 'error': 'No macOS devices found matching the filters'}
+
+    output_lines.append(f"Found {len(devices)} macOS device(s)")
+    output_lines.append("")
+    output_lines.append("Starting parallel execution...")
+    output_lines.append("")
+
+    # Determine which script to use
+    script_name = 'enable_rd' if action == 'enable' else 'disable_rd'
+    script_path = os.path.join(COMMANDS_DIR, script_name)
+
+    success_count = 0
+
+    def run_rd_command(device_info):
+        """Execute RD command for a single device"""
+        udid, hostname = device_info
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+            result = subprocess.run(
+                [script_path, udid],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                cwd=COMMANDS_DIR,
+                env=env
+            )
+
+            if result.returncode == 0:
+                return {'success': True, 'udid': udid, 'hostname': hostname}
+            else:
+                error_msg = result.stderr.strip() if result.stderr else 'Command failed'
+                return {'success': False, 'udid': udid, 'hostname': hostname, 'error': error_msg}
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'udid': udid, 'hostname': hostname, 'error': 'Timeout'}
+        except Exception as e:
+            return {'success': False, 'udid': udid, 'hostname': hostname, 'error': str(e)}
+
+    # Execute in parallel using ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(run_rd_command, device): device for device in devices}
+
+        for future in as_completed(futures):
+            result = future.result()
+            hostname = result.get('hostname', 'Unknown')
+            udid = result.get('udid', 'Unknown')
+
+            if result['success']:
+                output_lines.append(f"[OK] {hostname} ({udid})")
+                success_count += 1
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                output_lines.append(f"[ERROR] {hostname} ({udid}): {error_msg}")
+                errors.append(f"{hostname}: {error_msg}")
+
+    output_lines.append("")
+    output_lines.append("=" * 60)
+    output_lines.append("BULK REMOTE DESKTOP COMPLETE")
+    output_lines.append("=" * 60)
+    output_lines.append(f"Action: {action.upper()}")
+    output_lines.append(f"Successful: {success_count}/{len(devices)}")
+    output_lines.append(f"Failed: {len(errors)}")
+
+    if errors:
+        output_lines.append("")
+        output_lines.append("Failed devices:")
+        for err in errors:
+            output_lines.append(f"  - {err}")
+
+    # Audit log
+    audit_log(
+        user=user_info.get('username'),
+        action='bulk_remote_desktop',
+        command='bulk_remote_desktop',
+        params={
+            'action': action,
+            'devices_count': len(devices),
+            'selected_devices': len(selected_devices) if selected_devices else 'all',
+            'manifest_filter': manifest_filter
+        },
+        result=f"{action.upper()} on {success_count}/{len(devices)} devices",
         success=len(errors) == 0
     )
 
@@ -2213,7 +2478,7 @@ def admin_execute():
 
     # Check for bulk operation
     # Some commands handle device iteration internally (native bulk commands)
-    native_bulk_commands = ['bulk_schedule_os_update', 'bulk_new_device_installation']
+    native_bulk_commands = ['bulk_schedule_os_update', 'bulk_new_device_installation', 'bulk_install_application']
     if 'devices' in params and isinstance(params.get('devices'), list) and cmd_id not in native_bulk_commands:
         results = execute_bulk_command(cmd_id, params['devices'], params, user)
         return jsonify({'success': True, 'results': results})

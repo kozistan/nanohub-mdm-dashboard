@@ -1,16 +1,22 @@
 #!/bin/bash
-# NanoHUB DeviceInformation - Query device information
-# Usage: ./device_information <UDID>
+# device_lock.sh - Lock device immediately
+# Usage: ./device_lock.sh <UDID> [PIN] [Message]
 
-if [ $# -ne 1 ]; then
-    echo "Usage: $0 <UDID>"
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <UDID> [PIN] [Message]"
+    echo "Example: $0 00008020-0001713C1E90003A"
+    echo "Example: $0 00008020-0001713C1E90003A 123456 'Device locked by admin'"
     exit 1
 fi
 
 UDID="$1"
-CMD_UUID=$(uuidgen)
-TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+PIN="$2"
+MESSAGE="${3:-Device has been locked by administrator}"
 
+CMD_UUID=$(uuidgen)
+
+# Vytvoř DeviceLock command (unique temp file for parallel execution)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
 cat > "$TEMP_PLIST" << PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -19,14 +25,10 @@ cat > "$TEMP_PLIST" << PLIST_EOF
     <key>Command</key>
     <dict>
         <key>RequestType</key>
-        <string>DeviceInformation</string>
-        <key>Queries</key>
-        <array>
-            <string>UDID</string>
-            <string>DeviceName</string>
-            <string>OSVersion</string>
-            <string>SerialNumber</string>
-        </array>
+        <string>DeviceLock</string>
+        <key>Message</key>
+        <string>$MESSAGE</string>
+$(if [ -n "$PIN" ]; then echo "        <key>PIN</key>"; echo "        <string>$PIN</string>"; fi)
     </dict>
     <key>CommandUUID</key>
     <string>$CMD_UUID</string>
@@ -34,7 +36,11 @@ cat > "$TEMP_PLIST" << PLIST_EOF
 </plist>
 PLIST_EOF
 
-echo "Querying device information: $UDID"
+echo "Locking device: $UDID"
+if [ -n "$PIN" ]; then
+    echo "PIN: $PIN"
+fi
+echo "Message: $MESSAGE"
 echo "Command UUID: $CMD_UUID"
 
 RESPONSE=$(curl -s -T "$TEMP_PLIST" \
@@ -48,9 +54,8 @@ BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
 rm -f "$TEMP_PLIST"
 
 if [ "$HTTP_CODE" = "200" ]; then
-    echo "DeviceInformation command sent successfully!"
+    echo "Device lock command sent successfully!"
 else
-    echo "Failed to send DeviceInformation command (HTTP: $HTTP_CODE)"
+    echo "Failed to send device lock command (HTTP: $HTTP_CODE)"
     echo "Response: $BODY"
-    exit 1
 fi

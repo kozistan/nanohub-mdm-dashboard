@@ -1,6 +1,6 @@
 #!/bin/bash
-# NanoHUB Installed Application List - podle oficiální NanoMDM dokumentace
-# Usage: ./installed_application_list.sh <UDID>
+# NanoHUB OS Update Status - podle oficiální NanoMDM dokumentace
+# Usage: ./os_update_status.sh <UDID>
 
 if [ $# -ne 1 ]; then
     echo "Usage: $0 <UDID>"
@@ -10,12 +10,12 @@ fi
 
 UDID="$1"
 
-echo "[INFO] Getting installed applications for device: $UDID"
+echo "[INFO] Checking OS update status for device: $UDID"
 
 # Generate command UUID
 CMD_UUID=$(uuidgen)
 
-# Create InstalledApplicationList command (unique temp file for parallel execution)
+# Create OSUpdateStatus command (unique temp file for parallel execution)
 TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
 cat > "$TEMP_PLIST" << 'PLIST_EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -25,7 +25,7 @@ cat > "$TEMP_PLIST" << 'PLIST_EOF'
     <key>Command</key>
     <dict>
         <key>RequestType</key>
-        <string>InstalledApplicationList</string>
+        <string>OSUpdateStatus</string>
     </dict>
     <key>CommandUUID</key>
     <string>CMD_UUID_PLACEHOLDER</string>
@@ -36,7 +36,7 @@ PLIST_EOF
 # Replace placeholder with actual UUID
 sed -i "s/CMD_UUID_PLACEHOLDER/$CMD_UUID/g" "$TEMP_PLIST"
 
-echo "[INFO] Sending InstalledApplicationList command..."
+echo "[INFO] Sending OSUpdateStatus command..."
 echo "Command UUID: $CMD_UUID"
 
 # Send command via NanoMDM API
@@ -54,24 +54,25 @@ rm -f "$TEMP_PLIST"
 
 # Check response
 if [ "$HTTP_CODE" = "200" ]; then
-    echo "[OK] InstalledApplicationList command sent successfully!"
+    echo "[OK] OSUpdateStatus command sent successfully!"
     if [ -n "$BODY" ] && [ "$BODY" != "{}" ]; then
         echo "Response: $BODY"
     fi
     echo ""
-    echo "[INFO] Device will report installed applications..."
-    echo "[INFO] Results will appear in webhook logs within 30 seconds"
+    echo "[INFO] Device will report current OS update status..."
+    echo "[INFO] Status will appear in webhook logs within 15 seconds"
     echo ""
     echo "Monitor with:"
-    echo "  tail -f /var/log/nanohub/webhook.log | grep -E \"(InstalledApplicationList|$CMD_UUID)\""
+    echo "  tail -f /var/log/nanohub/webhook.log | grep -E \"(OSUpdateStatus|$CMD_UUID)\""
     echo ""
-    echo "Expected response includes:"
-    echo "  - List of all installed apps"
-    echo "  - Bundle IDs and versions"
-    echo "  - App names and sizes"
-    echo "  - Installation sources (App Store, MDM, etc.)"
+    echo "Expected status information:"
+    echo "  - Current update state (Idle, Downloading, Installing)"
+    echo "  - Download progress percentage"
+    echo "  - Installation progress"
+    echo "  - Error conditions if any"
+    echo "  - Restart requirements"
 else
-    echo "[ERROR] Failed to send InstalledApplicationList command (HTTP: $HTTP_CODE)"
+    echo "[ERROR] Failed to send OSUpdateStatus command (HTTP: $HTTP_CODE)"
     if [ -n "$BODY" ]; then
         echo "Error response: $BODY"
     fi
@@ -80,4 +81,4 @@ fi
 
 echo ""
 echo "[INFO] Command UUID: $CMD_UUID"
-echo "[INFO] Check webhook logs for complete application list"
+echo "[INFO] Check webhook logs for current update status details"

@@ -1,9 +1,8 @@
 """
 NanoHUB LDAP Authentication Module
-Authentication against Active Directory for NanoHUB MDM Dashboard
+Autentizace proti Active Directory pro mdm.example.com
 """
 
-import os
 import ldap3
 from ldap3 import Server, Connection, ALL, SUBTREE
 from ldap3.core.exceptions import LDAPException
@@ -16,27 +15,25 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('nanohub_ldap')
 
 # =============================================================================
-# LDAP CONFIGURATION
-# Configure these settings for your Active Directory environment
+# LDAP KONFIGURACE (z radius serveru)
 # =============================================================================
 
 LDAP_CONFIG = {
     'servers': [
-        {'host': os.getenv('LDAP_HOST', 'dc01.example.com'), 'port': 389},
-        {'host': os.getenv('LDAP_HOST_FAILOVER', 'dc02.example.com'), 'port': 389},  # failover
+        {'host': 'dc01.example.com', 'port': 389},
+        {'host': 'dc02.example.com', 'port': 389},  # failover
     ],
     'use_ssl': False,
     'use_starttls': True,
-    'bind_dn': os.getenv('LDAP_BIND_DN', 'CN=ldapadmin,OU=Admins,DC=example,DC=com'),
-    'bind_password': os.getenv('LDAP_BIND_PASSWORD', 'your_ldap_password_here'),
-    'base_dn': os.getenv('LDAP_BASE_DN', 'DC=example,DC=com'),
+    'bind_dn': 'CN=ldapadmin,OU=ServiceAccounts,DC=example,DC=com',
+    'bind_password': 'YOUR_LDAP_BIND_PASSWORD',
+    'base_dn': 'DC=example,DC=com',
     'user_search_filter': '(sAMAccountName={username})',
     'timeout': 4,
 }
 
 # =============================================================================
-# GROUPS AND PERMISSIONS
-# Map AD groups to application roles
+# SKUPINY A OPRAVNENI
 # =============================================================================
 
 GROUP_ROLE_MAPPING = {
@@ -60,7 +57,7 @@ ROLE_MANIFEST_FILTER = {
 }
 
 # =============================================================================
-# LDAP FUNCTIONS
+# LDAP FUNKCE
 # =============================================================================
 
 def get_ldap_connection(bind_dn=None, bind_password=None):
@@ -82,17 +79,17 @@ def get_ldap_connection(bind_dn=None, bind_password=None):
                 user=bind_dn,
                 password=bind_password,
                 auto_bind=False,
-                raise_exceptions=False
+                raise_exceptions=False  # Nehazt vyjimky, kontrolujeme result
             )
 
-            # Open connection
+            # Otevreni spojeni
             conn.open()
 
-            # STARTTLS before bind
+            # STARTTLS pred bindem
             if LDAP_CONFIG['use_starttls']:
                 conn.start_tls()
 
-            # Bind with credentials
+            # Bind s credentials
             if conn.bind():
                 logger.info(f"LDAP connected to {server_config['host']}")
                 return conn
@@ -235,7 +232,7 @@ def get_user_groups(username):
 
 
 # =============================================================================
-# FLASK DECORATORS
+# FLASK DECORATORY
 # =============================================================================
 
 def login_required(f):
@@ -390,7 +387,7 @@ LOGIN_TEMPLATE = '''
             </div>
             <button type="submit" class="btn btn-login red">Sign In</button>
         </form>
-        <p class="login-footer">Sign in with your domain account</p>
+        <p class="login-footer">Sign in with your SLOTO.SPACE domain account</p>
     </div>
 </body>
 </html>
@@ -467,7 +464,7 @@ def register_auth_routes(app):
 
 
 # =============================================================================
-# TEST FUNCTIONS
+# TESTOVACI FUNKCE
 # =============================================================================
 
 def test_ldap_connection():

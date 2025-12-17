@@ -1,0 +1,173 @@
+#!/bin/bash
+# NanoHUB Schedule OS Update - podle oficiální NanoMDM dokumentace
+# Usage: ./schedule_os_update.sh <UDID> <ACTION> [OPTIONS]
+
+function help() {
+    cat >&2 <<-EOF
+Usage: $0 <UDID> <ACTION> [OPTIONS]
+
+Positional arguments:
+  UDID                  Device UDID
+  ACTION                Install action (required)
+
+Install Actions:
+  Default              Use default system behavior
+  DownloadOnly         Download update but don't install
+  InstallASAP          Install immediately
+  NotifyOnly           Notify user but don't auto-install
+  InstallLater         Schedule for later installation
+  InstallForceRestart  Force restart after installation
+
+Options:
+  -h, --help           Show this help message
+  --key KEY            Product key for specific update
+  --version VER        Product version to install
+  --deferrals NUM      Maximum user deferrals allowed
+  --priority PRI       Priority (Low, High)
+  --uuid UUID          Custom command UUID
+
+Examples:
+  $0 <UDID> DownloadOnly
+  $0 <UDID> InstallASAP --priority High
+  $0 <UDID> InstallLater --deferrals 3
+EOF
+    exit 1
+}
+
+# Check minimum arguments
+if [ $# -lt 2 ]; then
+    help
+fi
+
+UDID="$1"
+ACTION="$2"
+shift 2
+
+# Init
+VERSION=""
+DEFERRALS=""
+PRIORITY=""
+UUID=""
+KEY=""
+
+# Parse optional args
+while [ $# -gt 0 ]; do
+    case $1 in
+        -h|--help) help ;;
+        --version) VERSION="$2"; shift 2 ;;
+        --deferrals) DEFERRALS="$2"; shift 2 ;;
+        --priority) PRIORITY="$2"; shift 2 ;;
+        --uuid) UUID="$2"; shift 2 ;;
+        --key) KEY="$2"; shift 2 ;;
+        *) echo "[ERROR] Unknown option: $1"; help ;;
+    esac
+done
+
+# Validate action
+case "$ACTION" in
+    Default|DownloadOnly|InstallASAP|NotifyOnly|InstallLater|InstallForceRestart) ;;
+    *) echo "[ERROR] Invalid InstallAction: $ACTION"; exit 1 ;;
+esac
+
+# Validate priority
+if [ -n "$PRIORITY" ]; then
+    case "$PRIORITY" in Low|High) ;; *) echo "[ERROR] Invalid Priority: $PRIORITY"; exit 1 ;; esac
+fi
+
+# UUID
+[ -z "$UUID" ] && UUID=$(uuidgen)
+
+echo "[INFO] Scheduling OS update for device: $UDID"
+echo "Install Action: $ACTION"
+[ -n "$VERSION" ] && echo "Product Version: $VERSION"
+[ -n "$KEY" ] && echo "Product Key: $KEY"
+[ -n "$PRIORITY" ] && echo "Priority: $PRIORITY"
+[ -n "$DEFERRALS" ] && echo "Max Deferrals: $DEFERRALS"
+
+# Create base plist (unique temp file for parallel execution)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+cat > "$TEMP_PLIST" << 'PLIST_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>ScheduleOSUpdate</string>
+        <key>Updates</key>
+        <array>
+            <dict>
+                <key>InstallAction</key>
+                <string>ACTION_PLACEHOLDER</string>
+OPTIONAL_PARAMS_PLACEHOLDER
+            </dict>
+        </array>
+    </dict>
+    <key>CommandUUID</key>
+    <string>UUID_PLACEHOLDER</string>
+</dict>
+</plist>
+PLIST_EOF
+
+# Build OPTIONAL_PARAMS
+OPTIONAL_PARAMS=""
+[ -n "$KEY" ] && OPTIONAL_PARAMS+="                <key>ProductKey</key>\n                <string>KEY_PLACEHOLDER</string>\n"
+[ -n "$VERSION" ] && OPTIONAL_PARAMS+="                <key>ProductVersion</key>\n                <string>VERSION_PLACEHOLDER</string>\n"
+[ -n "$PRIORITY" ] && OPTIONAL_PARAMS+="                <key>Priority</key>\n                <string>PRIORITY_PLACEHOLDER</string>\n"
+[ -n "$DEFERRALS" ] && OPTIONAL_PARAMS+="                <key>MaxUserDeferrals</key>\n                <integer>DEFERRALS_PLACEHOLDER</integer>\n"
+
+# Replace placeholders
+TMPFILE=$(mktemp)
+sed "s|ACTION_PLACEHOLDER|$ACTION|g; s|UUID_PLACEHOLDER|$UUID|g; s|OPTIONAL_PARAMS_PLACEHOLDER|$OPTIONAL_PARAMS|" "$TEMP_PLIST" > "$TMPFILE"
+mv "$TMPFILE" "$TEMP_PLIST"
+
+[ -n "$KEY" ] && sed -i "s|KEY_PLACEHOLDER|$KEY|g" "$TEMP_PLIST"
+[ -n "$VERSION" ] && sed -i "s|VERSION_PLACEHOLDER|$VERSION|g" "$TEMP_PLIST"
+[ -n "$PRIORITY" ] && sed -i "s|PRIORITY_PLACEHOLDER|$PRIORITY|g" "$TEMP_PLIST"
+[ -n "$DEFERRALS" ] && sed -i "s|DEFERRALS_PLACEHOLDER|$DEFERRALS|g" "$TEMP_PLIST"
+
+echo ""
+echo "[INFO] Sending ScheduleOSUpdate command..."
+echo "Command UUID: $UUID"
+
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:ddce14cd1184371050150aaeaef30d65ae5441a3d5ccdf3099cd815f3bb5c774" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+rm -f "$TEMP_PLIST"
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "[OK] ScheduleOSUpdate command sent successfully!"
+    [ -n "$BODY" ] && [ "$BODY" != "{}" ] && echo "Response: $BODY"
+    echo ""
+    echo "================================================================"
+    echo "OS UPDATE SCHEDULED"
+    echo "================================================================"
+    echo "Action: $ACTION"
+    case "$ACTION" in
+        DownloadOnly) echo "Behavior: Update will be downloaded but not installed" ;;
+        InstallASAP) echo "Behavior: Update will install immediately"; echo "Device may restart automatically" ;;
+        NotifyOnly) echo "Behavior: User will be notified of available update" ;;
+        InstallLater) echo "Behavior: Update scheduled for maintenance window" ;;
+        InstallForceRestart) echo "Behavior: Immediate install with forced restart" ;;
+        Default) echo "Behavior: Uses system default behavior" ;;
+    esac
+    echo ""
+    echo "Monitor progress with:"
+    echo "  ./os_update_status.sh $UDID"
+    echo "  tail -f /var/log/nanohub/webhook.log | grep -E \"(ScheduleOSUpdate|OSUpdateStatus|$UUID)\""
+    echo "================================================================"
+else
+    echo "[ERROR] Failed to send ScheduleOSUpdate command (HTTP: $HTTP_CODE)"
+    [ -n "$BODY" ] && echo "Error response: $BODY"
+    exit 1
+fi
+
+echo ""
+echo "[INFO] Command UUID: $UUID"
+echo "[INFO] Use os_update_status.sh to monitor update progress"

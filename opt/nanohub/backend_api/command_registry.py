@@ -1,9 +1,16 @@
 """
 NanoHUB Command Registry
 Metadata for all MDM commands available in admin panel
+Configuration loaded from /opt/nanohub/web_environment.sh
 """
 
-import os
+# Import configuration loader
+from web_config import (
+    get_branch_options, get_platform_options, get_manifest_options,
+    get_account_options, get_dep_options, get_os_update_action_options,
+    get_priority_options, get_yes_no_options, get_os_filter_options,
+    get_path
+)
 
 # Command categories
 CATEGORIES = {
@@ -19,14 +26,14 @@ CATEGORIES = {
     'other': {'name': 'Other', 'icon': 'settings', 'order': 10},
 }
 
-# Profile directories - configure for your environment
+# Profile directories (loaded from config)
 PROFILE_DIRS = {
-    'standard': os.getenv('PROFILES_DIR', '/opt/nanohub/profiles/'),
-    'wireguard': os.getenv('WIREGUARD_PROFILES_DIR', '/opt/nanohub/profiles/wireguard_configs/'),
+    'standard': get_path('PROFILES_DIR') or '/opt/nanohub/profiles/',
+    'wireguard': get_path('WIREGUARD_DIR') or '/opt/nanohub/profiles/wireguard_configs/',
 }
 
-# Commands directory
-COMMANDS_DIR = os.getenv('COMMANDS_DIR', '/opt/nanohub/tools/api/commands')
+# Commands directory (loaded from config)
+COMMANDS_DIR = get_path('COMMANDS_DIR') or '/opt/nanohub/tools/api/commands'
 
 # All available commands with metadata
 COMMANDS = {
@@ -36,29 +43,18 @@ COMMANDS = {
     'bulk_new_device_installation': {
         'name': 'New Device Installation',
         'category': 'setup',
-        'description': 'Automated installation workflow for new devices',
+        'description': 'Automated installation workflow for new devices (Karlin/Belehradska branches)',
         'script': '_internal_bulk_install',
         'parameters': [
             {'name': 'branch', 'label': 'Branch', 'type': 'select', 'required': True,
-             'options': [
-                 {'value': 'main', 'label': 'Main Office'},
-                 {'value': 'branch', 'label': 'Branch Office'},
-             ]},
+             'options': '_DYNAMIC_BRANCHES'},
             {'name': 'platform', 'label': 'Platform', 'type': 'select', 'required': True,
-             'options': [
-                 {'value': 'macos', 'label': 'macOS'},
-                 {'value': 'ios', 'label': 'iOS'},
-             ]},
+             'options': '_DYNAMIC_PLATFORMS'},
             {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
             {'name': 'munki_type', 'label': 'Munki Profile Type (macOS only)', 'type': 'select', 'required': False,
-             'options': [
-                 {'value': 'default', 'label': 'Default'},
-                 {'value': 'tech', 'label': 'Tech'},
-                 {'value': 'branch-default', 'label': 'Branch Default'},
-                 {'value': 'branch-tech', 'label': 'Branch Tech'},
-             ]},
+             'options': '_DYNAMIC_MANIFESTS'},
             {'name': 'hostname', 'label': 'Hostname (optional, for Directory Services)', 'type': 'string', 'required': False,
-             'placeholder': 'e.g. mac-001'},
+             'placeholder': 'e.g. device08'},
             {'name': 'install_filevault', 'label': 'Install FileVault Profile', 'type': 'select', 'required': False,
              'options': [
                  {'value': 'no', 'label': 'No - Skip FileVault'},
@@ -168,7 +164,7 @@ COMMANDS = {
         'parameters': [
             {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
             {'name': 'manifest_url', 'label': 'Manifest URL', 'type': 'string', 'required': True,
-             'placeholder': 'https://repo.example.com/app.plist'},
+             'placeholder': 'https://example.com/app.plist'},
         ],
         'dangerous': False,
         'min_role': 'operator',
@@ -341,25 +337,11 @@ COMMANDS = {
              ]},
             {'name': 'devices', 'label': 'Select Devices (empty = all matching filters)', 'type': 'devices', 'required': False},
             {'name': 'manifest', 'label': 'Filter by Manifest', 'type': 'select', 'required': False,
-             'options': [
-                 {'value': '', 'label': '-- All Manifests --'},
-                 {'value': 'default', 'label': 'Default'},
-                 {'value': 'tech', 'label': 'Tech'},
-                 {'value': 'branch-default', 'label': 'Branch Default'},
-                 {'value': 'branch-tech', 'label': 'Branch Tech'},
-             ]},
+             'options': '_DYNAMIC_MANIFESTS_ALL'},
             {'name': 'account_filter', 'label': 'Filter by Account', 'type': 'select', 'required': False,
-             'options': [
-                 {'value': '', 'label': '-- All Accounts --'},
-                 {'value': 'enabled', 'label': 'Enabled Only'},
-                 {'value': 'disabled', 'label': 'Disabled Only'},
-             ]},
+             'options': '_DYNAMIC_ACCOUNTS_ALL'},
             {'name': 'os_filter', 'label': 'Filter by OS', 'type': 'select', 'required': False,
-             'options': [
-                 {'value': '', 'label': '-- Auto (based on options) --'},
-                 {'value': 'ios', 'label': 'iOS Only'},
-                 {'value': 'macos', 'label': 'macOS Only'},
-             ]},
+             'options': '_DYNAMIC_OS_FILTER'},
             {'name': 'ios_key', 'label': 'iOS Product Key', 'type': 'string', 'required': False,
              'placeholder': 'e.g. iOS17.1'},
             {'name': 'ios_version', 'label': 'iOS Version', 'type': 'string', 'required': False,
@@ -420,6 +402,28 @@ COMMANDS = {
         'min_role': 'operator',
         'bulk_supported': False,
     },
+    'bulk_remote_desktop': {
+        'name': 'Bulk Remote Desktop',
+        'category': 'remote_desktop',
+        'description': 'Enable or disable Remote Desktop on selected macOS devices',
+        'script': '_internal_bulk_remote_desktop',
+        'parameters': [
+            {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
+             'options': [
+                 {'value': 'enable', 'label': 'Enable Remote Desktop'},
+                 {'value': 'disable', 'label': 'Disable Remote Desktop'},
+             ]},
+            {'name': 'devices', 'label': 'Select Devices (empty = all macOS matching filter)', 'type': 'devices', 'required': False,
+             'filter_os': 'macos'},
+            {'name': 'manifest', 'label': 'Filter by Manifest', 'type': 'select', 'required': False,
+             'options': '_DYNAMIC_MANIFESTS_ALL'},
+        ],
+        'dangerous': True,
+        'danger_level': 'medium',
+        'min_role': 'operator',
+        'bulk_supported': False,
+        'info_text': 'Select specific devices or leave empty to target ALL macOS devices matching the manifest filter. Commands are executed in parallel for fast execution.',
+    },
 
     # =========================================================================
     # SECURITY
@@ -434,7 +438,7 @@ COMMANDS = {
             {'name': 'message', 'label': 'Message', 'type': 'string', 'required': False,
              'placeholder': 'This device has been lost. Please contact...'},
             {'name': 'phone', 'label': 'Phone Number', 'type': 'string', 'required': False,
-             'placeholder': '+1...'},
+             'placeholder': '+420...'},
         ],
         'dangerous': True,
         'danger_level': 'medium',
@@ -658,6 +662,7 @@ COMMANDS = {
         'category': 'other',
         'description': 'Send HTTP command to NanoHUB agent on device (test, hostname, shell, user management)',
         'script': 'send_command',
+        'script_dir': '/opt/nanohub/tools/api/commands',
         'parameters': [
             {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
             {'name': 'command_type', 'label': 'Command Type', 'type': 'select', 'required': True,
@@ -690,6 +695,7 @@ COMMANDS = {
         'category': 'diagnostics',
         'description': 'Query device inventory database',
         'script': 'db_device_query.sh',
+        'script_dir': '/opt/nanohub/tools',
         'parameters': [
             {'name': 'query_type', 'label': 'Query Type', 'type': 'select', 'required': True,
              'options': [
@@ -730,33 +736,15 @@ COMMANDS = {
             {'name': 'serial', 'label': 'Serial Number', 'type': 'string', 'required': False,
              'placeholder': 'e.g. FVFKQ0LW1WG7'},
             {'name': 'hostname', 'label': 'Hostname', 'type': 'string', 'required': False,
-             'placeholder': 'e.g. mac-001'},
+             'placeholder': 'e.g. office-mac01'},
             {'name': 'os', 'label': 'OS', 'type': 'select', 'required': False,
-             'options': [
-                 {'value': '', 'label': '-- Select --'},
-                 {'value': 'macos', 'label': 'macOS'},
-                 {'value': 'ios', 'label': 'iOS'},
-             ]},
+             'options': '_DYNAMIC_PLATFORMS_SELECT'},
             {'name': 'manifest', 'label': 'Manifest', 'type': 'select', 'required': False,
-             'options': [
-                 {'value': '', 'label': '-- Default --'},
-                 {'value': 'default', 'label': 'Default'},
-                 {'value': 'tech', 'label': 'Tech'},
-                 {'value': 'branch-default', 'label': 'Branch Default'},
-                 {'value': 'branch-tech', 'label': 'Branch Tech'},
-             ]},
+             'options': '_DYNAMIC_MANIFESTS_DEFAULT'},
             {'name': 'account', 'label': 'Account', 'type': 'select', 'required': False,
-             'options': [
-                 {'value': '', 'label': '-- Default --'},
-                 {'value': 'disabled', 'label': 'Disabled'},
-                 {'value': 'enabled', 'label': 'Enabled'},
-             ]},
+             'options': '_DYNAMIC_ACCOUNTS_DEFAULT'},
             {'name': 'dep', 'label': 'DEP', 'type': 'select', 'required': False,
-             'options': [
-                 {'value': '', 'label': '-- Default --'},
-                 {'value': '1', 'label': 'Enabled'},
-                 {'value': '0', 'label': 'Disabled'},
-             ]},
+             'options': '_DYNAMIC_DEP_DEFAULT'},
         ],
         'dangerous': False,
         'min_role': 'operator',
@@ -823,3 +811,63 @@ def check_role_permission(user_role, required_role):
     # bel-admin has same permission level as admin, just filtered by manifest
     role_hierarchy = {'admin': 3, 'bel-admin': 3, 'operator': 2, 'report': 1}
     return role_hierarchy.get(user_role, 0) >= role_hierarchy.get(required_role, 0)
+
+
+# =============================================================================
+# DYNAMIC OPTIONS RESOLUTION
+# =============================================================================
+
+def _get_dynamic_options():
+    """Build dynamic options mapping from web_environment.sh config."""
+    return {
+        # Basic options without empty selection
+        '_DYNAMIC_BRANCHES': get_branch_options(include_empty=False),
+        '_DYNAMIC_PLATFORMS': get_platform_options(include_empty=False),
+        '_DYNAMIC_MANIFESTS': get_manifest_options(include_empty=False),
+
+        # Options with "All" selection for filters
+        '_DYNAMIC_MANIFESTS_ALL': get_manifest_options(include_empty=True, empty_label='-- All Manifests --'),
+        '_DYNAMIC_ACCOUNTS_ALL': get_account_options(include_empty=True, empty_label='-- All Accounts --'),
+
+        # Options with "Select" selection
+        '_DYNAMIC_PLATFORMS_SELECT': get_platform_options(include_empty=True, empty_label='-- Select --'),
+
+        # Options with "Default" selection
+        '_DYNAMIC_MANIFESTS_DEFAULT': get_manifest_options(include_empty=True, empty_label='-- Default --'),
+        '_DYNAMIC_ACCOUNTS_DEFAULT': get_account_options(include_empty=True, empty_label='-- Default --'),
+        '_DYNAMIC_DEP_DEFAULT': get_dep_options(include_empty=True, empty_label='-- Default --'),
+
+        # OS filter with auto option
+        '_DYNAMIC_OS_FILTER': get_os_filter_options(),
+    }
+
+
+def _resolve_dynamic_options(commands):
+    """Replace dynamic option placeholders with actual options."""
+    dynamic_opts = _get_dynamic_options()
+
+    for cmd_id, cmd in commands.items():
+        if 'parameters' not in cmd:
+            continue
+
+        for param in cmd['parameters']:
+            if 'options' in param and isinstance(param['options'], str):
+                placeholder = param['options']
+                if placeholder in dynamic_opts:
+                    param['options'] = dynamic_opts[placeholder]
+                else:
+                    print(f"[WARNING] Unknown dynamic option placeholder: {placeholder}")
+
+    return commands
+
+
+def reload_commands():
+    """Reload commands with fresh configuration (call after config change)."""
+    global COMMANDS
+    from web_config import load_config
+    load_config(force_reload=True)
+    _resolve_dynamic_options(COMMANDS)
+
+
+# Initialize dynamic options on module load
+_resolve_dynamic_options(COMMANDS)

@@ -98,7 +98,7 @@ a {
 a:hover { text-decoration: underline; color: #e92128; }
 
 /* Inputs */
-input[type="text"], input[type="password"], input[type="number"] {
+input[type="text"], input[type="password"], input[type="number"], select {
   border: 1px solid #bcd2f7;
   border-radius: 5px;
   font-size: 1em;
@@ -107,9 +107,10 @@ input[type="text"], input[type="password"], input[type="number"] {
   color: #283366;
   transition: border 0.15s, background 0.15s;
 }
-input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus {
-  border-color: #21243b;
+input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, select:focus {
+  border-color: #e89898;
   background: #f0f3fa;
+  outline: none;
 }
 
 /* Tables */

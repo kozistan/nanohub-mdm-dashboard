@@ -1,0 +1,88 @@
+#!/bin/bash
+#
+# NanoHUB RemoveProfile Script
+#
+# Description:
+# This script removes a profile identified by ProfileIdentifier from specified device using NanoMDM API.
+#
+# Usage:
+#   ./remove_profile.sh <UDID> <ProfileIdentifier>
+#
+# Parameters:
+#   <UDID>              - Unique Device Identifier of the target device
+#   <ProfileIdentifier>  - Identifier of the profile to be removed
+#
+# Example:
+#   ./remove_profile.sh 00008020-0001713C1E90003A com.example.wifi.corporate
+#
+# Note:
+#   To find ProfileIdentifier, run profile_list.sh script:
+#     ./profile_list.sh 00008020-0001713C1E90003A
+#
+# Requirements:
+#   - NanoMDM API accessible with proper authentication
+#
+
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 <UDID> <ProfileIdentifier>"
+    echo "Example: $0 00008020-0001713C1E90003A com.example.wifi.corporate"
+    echo ""
+    echo "To find ProfileIdentifier, run ProfileList first:"
+    echo "./profile_list.sh 00008020-0001713C1E90003A"
+    exit 1
+fi
+
+UDID="$1"
+PROFILE_IDENTIFIER="$2"
+
+CMD_UUID=$(uuidgen)
+
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+cat > "$TEMP_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>RemoveProfile</string>
+        <key>Identifier</key>
+        <string>$PROFILE_IDENTIFIER</string>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
+echo "Removing profile: $PROFILE_IDENTIFIER"
+echo "Device UDID: $UDID"
+echo "Command UUID: $CMD_UUID"
+
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:ddce14cd1184371050150aaeaef30d65ae5441a3d5ccdf3099cd815f3bb5c774" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "Profile removal command sent successfully."
+    echo "Response: $BODY"
+else
+    echo "Failed to send profile removal command."
+    echo "HTTP Code: $HTTP_CODE"
+    echo "Response: $BODY"
+    exit 1
+fi
+
+rm -f "$TEMP_PLIST"
+
+echo ""
+echo "Monitor removal with:"
+echo "tail -f /var/log/nanohub/webhook.log | grep -E '(RemoveProfile|profile)'"
+echo ""
+echo "Verify removal with:"
+echo "./profile_list.sh $UDID"

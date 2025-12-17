@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 NanoHUB Web Frontend with LDAP Authentication
-Flask application for web interface with Active Directory login
+Flask aplikace pro webove rozhrani s AD prihlasenim
 """
 
 from flask import Flask, render_template_string, session, redirect, url_for, request, jsonify
 from datetime import timedelta
 import os
 
-# Import LDAP auth module
+# Import LDAP auth modulu
 from nanohub_ldap_auth import (
     register_auth_routes,
     login_required,
@@ -20,21 +20,20 @@ from nanohub_ldap_auth import (
 from nanohub_admin import admin_bp
 
 app = Flask(__name__, static_folder='/var/www/mdm-web/static', static_url_path='/static')
-# IMPORTANT: Change this secret key in production!
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'change-this-secret-key-in-production')
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'nanohub-secret-key-change-in-production-abc123xyz')
 app.permanent_session_lifetime = timedelta(hours=8)
 
-# Path to original index.html
-ORIGINAL_INDEX_PATH = os.environ.get('DASHBOARD_INDEX_PATH', '/var/www/mdm-web/index.html')
+# Cesta k originalnimu index.html
+ORIGINAL_INDEX_PATH = '/var/www/mdm-web/index.html'
 
-# Register auth routes (/login, /logout)
+# Registrace auth rout (/login, /logout)
 register_auth_routes(app)
 
-# Register admin panel (/admin/*)
+# Registrace admin panelu (/admin/*)
 app.register_blueprint(admin_bp)
 
 # =============================================================================
-# SESSION PANEL - injected into original HTML
+# SESSION PANEL - vlozi se do originalniho HTML (ve stylu stranky)
 # =============================================================================
 
 SESSION_PANEL_STYLE = '''
@@ -79,7 +78,7 @@ SESSION_PANEL_HTML = '''
 
 
 def inject_session_panel(html_content, user_info):
-    """Inject session panel into HTML content"""
+    """Vlozi session panel do HTML obsahu"""
     # Admin link only for admin, bel-admin and operator roles
     admin_link = ''
     user_role = user_info.get('role', 'report')
@@ -92,10 +91,10 @@ def inject_session_panel(html_content, user_info):
         admin_link=admin_link,
     )
 
-    # Inject style into <head>
+    # Vloz style do <head>
     html_content = html_content.replace('</head>', SESSION_PANEL_STYLE + '</head>')
 
-    # Inject session panel after </h1>
+    # Vloz session panel za </h1>
     html_content = html_content.replace('</h1>', '</h1>\n' + session_panel)
 
     return html_content
@@ -108,12 +107,12 @@ def inject_session_panel(html_content, user_info):
 @app.route('/')
 @login_required
 def index():
-    """Main page - loads original index.html and injects session panel"""
+    """Hlavni stranka - nacte puvodni index.html a vlozi session panel"""
     try:
         with open(ORIGINAL_INDEX_PATH, 'r', encoding='utf-8') as f:
             html_content = f.read()
 
-        # Inject session panel
+        # Vloz session panel
         html_content = inject_session_panel(html_content, session.get('user', {}))
 
         return html_content
@@ -129,7 +128,7 @@ def dashboard():
 
 @app.route('/auth/check')
 def auth_check():
-    """Endpoint to check if user is logged in (for AJAX)"""
+    """Endpoint pro kontrolu zda je uzivatel prihlasen (pro AJAX)"""
     if 'user' in session:
         return jsonify({
             'authenticated': True,
@@ -148,7 +147,7 @@ def forbidden(e):
     return render_template_string('''
 <!DOCTYPE html>
 <html>
-<head><title>403 - Access Denied</title>
+<head><title>403 - Pristup odepren</title>
 <style>
 body { font-family: sans-serif; background: #f5f5f5; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
 .box { background: white; padding: 40px; border-radius: 8px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
@@ -158,9 +157,9 @@ a { color: #3572e3; }
 </head>
 <body>
 <div class="box">
-<h1>403 - Access Denied</h1>
-<p>You do not have permission to access this page.</p>
-<p><a href="/">Back to dashboard</a></p>
+<h1>403 - Pristup odepren</h1>
+<p>Nemate opravneni pro pristup k teto strance.</p>
+<p><a href="/">Zpet na dashboard</a></p>
 </div>
 </body>
 </html>
@@ -172,7 +171,7 @@ def not_found(e):
     return render_template_string('''
 <!DOCTYPE html>
 <html>
-<head><title>404 - Page Not Found</title>
+<head><title>404 - Stranka nenalezena</title>
 <style>
 body { font-family: sans-serif; background: #f5f5f5; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
 .box { background: white; padding: 40px; border-radius: 8px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
@@ -182,8 +181,8 @@ a { color: #3572e3; }
 </head>
 <body>
 <div class="box">
-<h1>404 - Page Not Found</h1>
-<p><a href="/">Back to dashboard</a></p>
+<h1>404 - Stranka nenalezena</h1>
+<p><a href="/">Zpet na dashboard</a></p>
 </div>
 </body>
 </html>

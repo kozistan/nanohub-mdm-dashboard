@@ -1,0 +1,88 @@
+#!/bin/bash
+#
+# NanoHUB Bulk Remote Desktop Script
+#
+# Description:
+# This script enables or disables Remote Desktop on all macOS devices listed
+# in the device_inventory database.
+#
+# Usage:
+#   ./bulk_remote_desktop <enable|disable>
+#
+# Parameters:
+#   <enable|disable> - Action to perform (enable or disable Remote Desktop)
+#
+# Example:
+#   ./bulk_remote_desktop enable
+#   ./bulk_remote_desktop disable
+#
+# Requirements:
+#   - NanoMDM API running and accessible
+#   - Database credentials configured in environment.sh
+#
+# Note: This command is for macOS devices only
+#
+
+if [ "$#" -ne 1 ]; then
+  echo "Usage: $0 <enable|disable>"
+  echo ""
+  echo "Examples:"
+  echo "  $0 enable   - Enable Remote Desktop on all macOS devices"
+  echo "  $0 disable  - Disable Remote Desktop on all macOS devices"
+  exit 1
+fi
+
+ACTION="$1"
+
+# Validate action parameter
+if [ "$ACTION" != "enable" ] && [ "$ACTION" != "disable" ]; then
+  echo "Error: Invalid action '$ACTION'"
+  echo "Valid actions are: enable, disable"
+  exit 1
+fi
+
+# Source environment variables for DB credentials
+if [[ -f /opt/nanohub/environment.sh ]]; then
+  source /opt/nanohub/environment.sh
+else
+  echo "Error: /opt/nanohub/environment.sh not found!"
+  exit 1
+fi
+
+echo "Starting bulk Remote Desktop $ACTION for macOS devices"
+
+# Extract device UUIDs for macOS devices using SQL
+DEVICE_UUIDS=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -sN -e "SELECT uuid FROM device_inventory WHERE os='macos' ORDER BY hostname" 2>/dev/null)
+
+if [ -z "$DEVICE_UUIDS" ]; then
+  echo "No macOS devices found in database"
+  exit 0
+fi
+
+# Count devices
+DEVICE_COUNT=$(echo "$DEVICE_UUIDS" | wc -l)
+echo "Found $DEVICE_COUNT macOS device(s)"
+echo ""
+
+echo ""
+echo "Starting parallel execution..."
+echo ""
+
+# Parallel execution - all commands run simultaneously
+for UDID in $DEVICE_UUIDS; do
+  if [ "$ACTION" = "enable" ]; then
+    ./tools/api/commands/enable_rd "$UDID" &
+  else
+    ./tools/api/commands/disable_rd "$UDID" &
+  fi
+done
+
+# Wait for all background jobs to complete
+wait
+
+echo ""
+echo "========================================="
+echo "Bulk Remote Desktop $ACTION completed"
+echo "Total devices: $DEVICE_COUNT"
+echo "All commands sent in parallel"
+echo "========================================="

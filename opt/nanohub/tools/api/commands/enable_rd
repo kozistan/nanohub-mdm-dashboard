@@ -1,16 +1,20 @@
 #!/bin/bash
-# NanoHUB DeviceInformation - Query device information
-# Usage: ./device_information <UDID>
+# enable_remote_desktop.sh - Enable Remote Desktop (macOS only)
+# Usage: ./enable_remote_desktop.sh <UDID>
 
 if [ $# -ne 1 ]; then
     echo "Usage: $0 <UDID>"
+    echo "Example: $0 00008020-0001713C1E90003A"
+    echo ""
+    echo "Note: This command is for macOS devices only"
     exit 1
 fi
 
 UDID="$1"
 CMD_UUID=$(uuidgen)
-TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
 
+# Vytvoř EnableRemoteDesktop command (unique temp file for parallel execution)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
 cat > "$TEMP_PLIST" << PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -19,14 +23,7 @@ cat > "$TEMP_PLIST" << PLIST_EOF
     <key>Command</key>
     <dict>
         <key>RequestType</key>
-        <string>DeviceInformation</string>
-        <key>Queries</key>
-        <array>
-            <string>UDID</string>
-            <string>DeviceName</string>
-            <string>OSVersion</string>
-            <string>SerialNumber</string>
-        </array>
+        <string>EnableRemoteDesktop</string>
     </dict>
     <key>CommandUUID</key>
     <string>$CMD_UUID</string>
@@ -34,7 +31,7 @@ cat > "$TEMP_PLIST" << PLIST_EOF
 </plist>
 PLIST_EOF
 
-echo "Querying device information: $UDID"
+echo "Enabling Remote Desktop for device: $UDID"
 echo "Command UUID: $CMD_UUID"
 
 RESPONSE=$(curl -s -T "$TEMP_PLIST" \
@@ -45,12 +42,12 @@ RESPONSE=$(curl -s -T "$TEMP_PLIST" \
 HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
 BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
 
-rm -f "$TEMP_PLIST"
-
 if [ "$HTTP_CODE" = "200" ]; then
-    echo "DeviceInformation command sent successfully!"
+    echo "✅ Enable Remote Desktop command sent successfully!"
+    echo "Remote Desktop should now be accessible on the macOS device"
 else
-    echo "Failed to send DeviceInformation command (HTTP: $HTTP_CODE)"
+    echo "❌ Failed to send Enable Remote Desktop command (HTTP: $HTTP_CODE)"
     echo "Response: $BODY"
-    exit 1
 fi
+
+rm -f "$TEMP_PLIST"

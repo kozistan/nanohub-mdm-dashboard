@@ -107,6 +107,13 @@
     // Selected device for functions
     let selectedDevice = null;
 
+    // Helper function to convert DEP value to Yes/No
+    function formatDep(dep) {
+      if (dep === '1' || dep === 1 || dep === 'enabled') return 'Yes';
+      if (dep === '0' || dep === 0 || dep === 'disabled') return 'No';
+      return '';
+    }
+
     // Error message definitions for each function/context
     const ERROR_MESSAGES = {
       // Device Panel errors
@@ -375,7 +382,7 @@
           <td>${dev.os}</td>
           <td>${dev.account}</td>
           <td>${dev.manifest}</td>
-          <td>${dev.dep||''}</td>
+          <td>${formatDep(dev.dep)}</td>
         </tr>`;
       });
       html += "</table>";
@@ -446,7 +453,7 @@
             html += `<tr><th>Operating System</th><td>${report.basic_info.os}</td></tr>`;
             html += `<tr><th>Manifest</th><td>${report.basic_info.manifest}</td></tr>`;
             html += `<tr><th>Account</th><td>${report.basic_info.account}</td></tr>`;
-            html += `<tr><th>DEP Status</th><td>${report.basic_info.dep}</td></tr>`;
+            html += `<tr><th>DEP Status</th><td>${formatDep(report.basic_info.dep)}</td></tr>`;
 
             let statusColor = '#95a5a6';
             if (report.basic_info.status === 'online') statusColor = '#27ae60';
@@ -564,7 +571,7 @@
           <td>${dev.os}</td>
           <td>${dev.account}</td>
           <td>${dev.manifest}</td>
-          <td>${dev.dep||''}</td>
+          <td>${formatDep(dev.dep)}</td>
         </tr>`;
       });
       html += "</table>";

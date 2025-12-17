@@ -1,0 +1,80 @@
+#!/bin/bash
+#
+# NanoHUB Bulk Install Application Script
+#
+# Description:
+# This script installs a specified application to all devices listed in the data/devices.json file,
+# filtered by the 'ios' or 'macos' operating system parameter.
+#
+# Usage:
+#   ./bulk_install_application <ios|macos> <manifest_url> [configuration_url] [management_flags]
+#
+# Parameters:
+#   <ios|macos>           - Target OS for application install
+#   <manifest_url>        - URL to the application manifest plist
+#   [configuration_url]   - Optional configuration URL
+#   [management_flags]    - Optional management flags (e.g., 'DeleteOnRemoval,PreventBackup')
+#
+# Example:
+#   ./bulk_install_application ios https://example.com/app.plist
+#   ./bulk_install_application macos https://example.com/app.plist https://example.com/config.plist
+#   ./bulk_install_application ios https://example.com/app.plist '' 'DeleteOnRemoval'
+#
+# Requirements:
+#   - 'jq' JSON processor installed on system
+#   - NanoMDM API running and accessible
+#
+
+if [ "$#" -lt 2 ]; then
+  echo "Usage: $0 <ios|macos> <manifest_url> [configuration_url] [management_flags]"
+  exit 1
+fi
+
+TARGET_OS="$1"
+MANIFEST_URL="$2"
+CONFIGURATION_URL="$3"
+MANAGEMENT_FLAGS="$4"
+
+# Delay between installations (in seconds)
+DELAY_SECONDS=2
+
+# Source environment variables for DB credentials
+if [[ -f /opt/nanohub/environment.sh ]]; then
+  source /opt/nanohub/environment.sh
+else
+  echo "Error: /opt/nanohub/environment.sh not found!"
+  exit 1
+fi
+
+echo "Starting bulk application installation for OS: $TARGET_OS"
+echo "Manifest URL: $MANIFEST_URL"
+
+# Extract device UUIDs matching the target OS using SQL
+DEVICE_UUIDS=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -sN -e "SELECT uuid FROM device_inventory WHERE os='$TARGET_OS' ORDER BY hostname" 2>/dev/null)
+
+if [ -z "$DEVICE_UUIDS" ]; then
+  echo "No devices found for OS: $TARGET_OS"
+  exit 0
+fi
+
+DEVICE_COUNT=$(echo "$DEVICE_UUIDS" | wc -l)
+echo "Found $DEVICE_COUNT device(s)"
+echo ""
+echo "Starting parallel execution..."
+echo ""
+
+# Parallel execution - all commands run simultaneously
+for UDID in $DEVICE_UUIDS; do
+  echo "Installing application on device UDID: $UDID"
+  ./tools/api/commands/install_application "$UDID" "$MANIFEST_URL" "$CONFIGURATION_URL" "$MANAGEMENT_FLAGS" &
+done
+
+# Wait for all background jobs to complete
+wait
+
+echo ""
+echo "========================================="
+echo "Bulk application installation completed"
+echo "Total devices: $DEVICE_COUNT"
+echo "All commands sent in parallel"
+echo "========================================="

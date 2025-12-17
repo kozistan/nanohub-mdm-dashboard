@@ -2,8 +2,8 @@
 
 Web-based management dashboard for Apple MDM (Mobile Device Management) using NanoHUB backend with LDAP authentication and comprehensive admin panel.
 
-**Version:** 1.5
-**Last Updated:** 2025-12-14
+**Version:** 1.6
+**Last Updated:** 2025-12-17
 
 ## Features
 
@@ -12,14 +12,15 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **SQL-Based Device Management**: Fast, scalable MySQL device database
 - **Real-time Device Status**: Online/Active/Offline status indicators
 - **Device Search**: Search by UUID, serial number, or hostname
+- **Parallel Execution**: 10-20x faster bulk operations with race condition fixes
 
-### Admin Panel (38 commands, 10 categories)
+### Admin Panel (39 commands, 10 categories)
 - **Device Setup**: Automated installation workflows for new devices
 - **Profiles**: Install, remove, list profiles (bulk operations supported)
 - **Applications**: Install and manage applications
 - **Device Control**: Lock, unlock, restart, erase devices
 - **OS Updates**: Schedule and manage OS updates (with device selection, platform-specific options)
-- **Remote Desktop**: Enable/disable remote access
+- **Remote Desktop**: Enable/disable remote access (including bulk operations)
 - **Security**: Lost mode, security info
 - **Diagnostics**: Device information, MDM analyzer, system reports
 - **VPP Apps**: Volume Purchase Program app management
@@ -40,6 +41,8 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Device Manager**: Add/Update/Delete devices via web interface
 - **Audit Logging**: Complete audit trail for all admin actions
 - **Bulk Operations**: Execute commands on multiple devices simultaneously
+- **Parallel Execution**: All bulk scripts execute commands in parallel for 10-20x speed improvement
+- **Bulk Remote Desktop**: Enable/disable Remote Desktop on multiple macOS devices with device selection
 
 ## Screenshots
 
@@ -361,6 +364,39 @@ mysql -h localhost -u nanohub -p nanohub -e "SELECT COUNT(*) FROM device_invento
 - Enable audit logging
 - Regularly review audit logs
 
+## MDM Profiles
+
+MDM configuration profiles are **not included** in this repository. You must create and sign your own profiles.
+
+### Profile Locations
+
+```
+/opt/nanohub/profiles/                    # Standard profiles
+/opt/nanohub/profiles/wireguard_configs/  # WireGuard VPN profiles
+```
+
+### Profile Requirements
+
+- **Only signed profiles** (`.signed.mobileconfig`) are displayed in the Admin Panel GUI
+- Profiles must be signed with a valid Apple-trusted certificate
+- Unsigned profiles will not appear in the profile selection dropdown
+
+### Profile Naming Convention
+
+```
+company.macos.ProfileName.profile.signed.mobileconfig   # macOS profiles
+company.ios.ProfileName.profile.signed.mobileconfig     # iOS profiles
+```
+
+### Signing Profiles
+
+Use Apple Configurator 2 or a signing tool to sign profiles:
+
+```bash
+# Example using openssl (requires Apple Developer certificate)
+security cms -S -N "Your Signing Identity" -i unsigned.mobileconfig -o signed.mobileconfig
+```
+
 ## Files Structure
 
 ```
@@ -372,7 +408,8 @@ mysql -h localhost -u nanohub -p nanohub -e "SELECT COUNT(*) FROM device_invento
 │   ├── command_registry.py     # MDM command definitions
 │   ├── mdm-flask-api_wrappper.py # Legacy API wrapper
 │   └── nanohub_environment     # Environment configuration
-├── profiles/                   # MDM configuration profiles
+├── profiles/                   # MDM configuration profiles (not in repo)
+│   └── wireguard_configs/      # WireGuard VPN profiles (not in repo)
 ├── tools/api/commands/         # MDM command scripts
 └── venv/                       # Python virtual environment
 
