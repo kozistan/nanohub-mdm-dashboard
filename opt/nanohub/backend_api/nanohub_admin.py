@@ -217,6 +217,12 @@ def extract_command_uuid_from_output(output):
     if match2:
         return match2.group(1)
 
+    # Fallback: look for "Command UUID:" format (from shell scripts)
+    uuid_pattern3 = r'Command\s+UUID:\s*([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})'
+    match3 = re.search(uuid_pattern3, output, re.IGNORECASE)
+    if match3:
+        return match3.group(1)
+
     return None
 
 
