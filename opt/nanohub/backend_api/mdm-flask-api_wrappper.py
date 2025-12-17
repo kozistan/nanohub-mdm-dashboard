@@ -509,7 +509,7 @@ def mdm_analyzer():
     if not uuid:
         return jsonify({"error": "Device not found"}), 404
     try:
-        result = subprocess.run(["/opt/nanohub/tools/api/commands/mdm_analyzer", uuid], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(["/opt/nanohub/tools/api/commands/mdm_analyzer", uuid, "--json"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode != 0:
             return jsonify({"error": result.stderr}), 500
         obj = json.loads(result.stdout)

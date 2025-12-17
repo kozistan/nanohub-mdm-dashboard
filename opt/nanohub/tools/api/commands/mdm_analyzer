@@ -1,48 +1,508 @@
 #!/bin/bash
-# /opt/nanohub/tools/api/commands/mdm_analyzer
-# MDM Database Analyzer - CSV/JSON ONLY OUTPUT
+
+# MDM Database Analyzer
+# Usage: ./mdm_analyzer [UUID] [--json]
 
 # Load environment variables
 if [ -f ~/nanohub/environment.sh ]; then
     source ~/nanohub/environment.sh
-else
-    echo '{"error":"environment.sh not found"}'
-    exit 1
 fi
 
-# Validate required variables
-if [ -z "$DB_HOST" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASS" ] || [ -z "$DB_NAME" ]; then
-    echo '{"error":"Missing database credentials in environment"}'
-    exit 1
+# Fallback to defaults if not set
+DB_HOST="${DB_HOST:-127.0.0.1}"
+DB_USER="${DB_USER:-nanohub}"
+DB_PASS="${DB_PASS:-YOUR_DATABASE_PASSWORD}"
+DB_NAME="${DB_NAME:-nanohub}"
+
+# Check for --json flag
+JSON_MODE=false
+if [[ "$2" == "--json" ]] || [[ "$1" == "--json" ]]; then
+    JSON_MODE=true
 fi
 
-if [ -z "$1" ]; then
-    echo '{"error":"UUID is required"}'
-    exit 1
-fi
-
-UUID="$1"
-json="{"
-
-as_json_array(){
-  awk 'NR==1{split($0,H,"\t"); next} {printf "{"; for(i=1;i<=NF;i++) printf "%s\"%s\":\"%s\"", (i>1?",":""), H[i], $i; print "}"}' | jq -s .
+# MySQL connection function
+mysql_query() {
+    mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -N -e "$1" 2>/dev/null
 }
 
-# DEVICE_INFO
-info=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" --batch --raw \
-  -e "SELECT d.id as device_uuid, d.serial_number, d.created_at as device_registered, e.id as enrollment_id, e.type as enrollment_type, e.enabled, e.last_seen_at FROM devices d LEFT JOIN enrollments e ON d.id = e.device_id WHERE d.id = '$UUID';" "$DB_NAME" | as_json_array)
-[ -z "$info" ] && info="[]"
-json+="\"DEVICE_INFO\":$info"
+mysql_query_json() {
+    mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -N -e "$1" 2>/dev/null
+}
 
-# DEVICE_AUTH
-auth=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" --batch --raw \
-  -e "SELECT CASE WHEN authenticate LIKE '%<key>DeviceName</key>%' THEN SUBSTRING(authenticate, LOCATE('<string>', authenticate, LOCATE('<key>DeviceName</key>', authenticate)) + 8, LOCATE('</string>', authenticate, LOCATE('<key>DeviceName</key>', authenticate)) - LOCATE('<string>', authenticate, LOCATE('<key>DeviceName</key>', authenticate)) - 8) ELSE 'N/A' END as device_name, CASE WHEN authenticate LIKE '%<key>ProductName</key>%' THEN SUBSTRING(authenticate, LOCATE('<string>', authenticate, LOCATE('<key>ProductName</key>', authenticate)) + 8, LOCATE('</string>', authenticate, LOCATE('<key>ProductName</key>', authenticate)) - LOCATE('<string>', authenticate, LOCATE('<key>ProductName</key>', authenticate)) - 8) ELSE 'N/A' END as product_name, CASE WHEN authenticate LIKE '%<key>OSVersion</key>%' THEN SUBSTRING(authenticate, LOCATE('<string>', authenticate, LOCATE('<key>OSVersion</key>', authenticate)) + 8, LOCATE('</string>', authenticate, LOCATE('<key>OSVersion</key>', authenticate)) - LOCATE('<string>', authenticate, LOCATE('<key>OSVersion</key>', authenticate)) - 8) ELSE 'N/A' END as os_version, CASE WHEN authenticate LIKE '%<key>BuildVersion</key>%' THEN SUBSTRING(authenticate, LOCATE('<string>', authenticate, LOCATE('<key>BuildVersion</key>', authenticate)) + 8, LOCATE('</string>', authenticate, LOCATE('<key>BuildVersion</key>', authenticate)) - LOCATE('<string>', authenticate, LOCATE('<key>BuildVersion</key>', authenticate)) - 8) ELSE 'N/A' END as build_version FROM devices WHERE id = '$UUID' AND authenticate IS NOT NULL;" "$DB_NAME" | as_json_array)
-[ -z "$auth" ] && auth="[]"
-json+=",\"DEVICE_AUTH\":$auth"
+# Get UUID from parameter
+if [ -z "$1" ] || [[ "$1" == "--json" ]]; then
+    if [ "$JSON_MODE" = true ]; then
+        echo '{"error": "UUID required"}'
+        exit 1
+    fi
+    echo "Enter device UUID:"
+    read UUID
+else
+    UUID="$1"
+fi
 
-# ... (zbytek SQL queries stejně, jen používají $DB_* proměnné)
-# ACTIVITY_SUMMARY, COMMANDS_BY_TYPE, PENDING_COMMANDS, RECENT_CHECKINS, CURRENT_FULL_DEVICE_STATUS
-# (zkráceno pro přehlednost - ponech SQL queries stejné)
+# JSON MODE - return structured data for API
+if [ "$JSON_MODE" = true ]; then
+    # Get device info
+    DEVICE_INFO=$(mysql_query_json "
+    SELECT
+        d.id,
+        d.serial_number,
+        d.created_at,
+        COALESCE(e.type, 'N/A'),
+        COALESCE(e.enabled, 0),
+        COALESCE(e.last_seen_at, 'N/A'),
+        COALESCE(TIMESTAMPDIFF(MINUTE, e.last_seen_at, NOW()), -1)
+    FROM devices d
+    LEFT JOIN enrollments e ON d.id = e.device_id
+    WHERE d.id = '$UUID'
+    LIMIT 1;")
 
-json+="}"
-echo "$json"
+    if [ -z "$DEVICE_INFO" ]; then
+        echo '{"error": "Device not found in MDM database"}'
+        exit 1
+    fi
+
+    # Parse device info
+    IFS=$'\t' read -r DEV_UUID DEV_SERIAL DEV_CREATED ENR_TYPE ENR_ENABLED LAST_SEEN MINS_AGO <<< "$DEVICE_INFO"
+
+    # Get activity summary
+    ACTIVITY=$(mysql_query_json "
+    SELECT
+        COUNT(c.command_uuid),
+        COUNT(cr.command_uuid),
+        COUNT(c.command_uuid) - COUNT(cr.command_uuid)
+    FROM enrollments e
+    LEFT JOIN enrollment_queue eq ON e.id = eq.id
+    LEFT JOIN commands c ON eq.command_uuid = c.command_uuid
+    LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid
+    WHERE e.device_id = '$UUID'
+    GROUP BY e.id
+    LIMIT 1;")
+
+    IFS=$'\t' read -r TOTAL_CMDS COMPLETED_CMDS PENDING_CMDS <<< "$ACTIVITY"
+    TOTAL_CMDS=${TOTAL_CMDS:-0}
+    COMPLETED_CMDS=${COMPLETED_CMDS:-0}
+    PENDING_CMDS=${PENDING_CMDS:-0}
+
+    # Get pending commands list
+    PENDING_LIST=$(mysql_query_json "
+    SELECT
+        c.command_uuid,
+        c.request_type,
+        c.created_at,
+        TIMESTAMPDIFF(MINUTE, c.created_at, NOW())
+    FROM commands c
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid
+    WHERE eq.id = '$UUID'
+    AND cr.command_uuid IS NULL
+    ORDER BY c.created_at DESC
+    LIMIT 10;")
+
+    # Build pending commands JSON array
+    PENDING_JSON="["
+    FIRST=true
+    while IFS=$'\t' read -r CMD_UUID REQ_TYPE CREATED MINS_WAIT; do
+        [ -z "$CMD_UUID" ] && continue
+        if [ "$FIRST" = true ]; then
+            FIRST=false
+        else
+            PENDING_JSON+=","
+        fi
+        PENDING_JSON+="{\"command_uuid\":\"$CMD_UUID\",\"request_type\":\"$REQ_TYPE\",\"created_at\":\"$CREATED\",\"minutes_waiting\":$MINS_WAIT}"
+    done <<< "$PENDING_LIST"
+    PENDING_JSON+="]"
+
+    # Get recent check-ins
+    CHECKINS_LIST=$(mysql_query_json "
+    SELECT
+        cr.created_at,
+        c.request_type,
+        cr.status,
+        TIMESTAMPDIFF(MINUTE, cr.created_at, NOW())
+    FROM command_results cr
+    JOIN commands c ON cr.command_uuid = c.command_uuid
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    WHERE eq.id = '$UUID'
+    ORDER BY cr.created_at DESC
+    LIMIT 10;")
+
+    # Build check-ins JSON array
+    CHECKINS_JSON="["
+    FIRST=true
+    while IFS=$'\t' read -r CHECKIN_TIME REQ_TYPE STATUS MINS_AGO_CHK; do
+        [ -z "$CHECKIN_TIME" ] && continue
+        if [ "$FIRST" = true ]; then
+            FIRST=false
+        else
+            CHECKINS_JSON+=","
+        fi
+        CHECKINS_JSON+="{\"check_in_time\":\"$CHECKIN_TIME\",\"request_type\":\"$REQ_TYPE\",\"status\":\"$STATUS\",\"minutes_ago\":$MINS_AGO_CHK}"
+    done <<< "$CHECKINS_LIST"
+    CHECKINS_JSON+="]"
+
+    # Get commands by type
+    CMDS_BY_TYPE=$(mysql_query_json "
+    SELECT
+        c.request_type,
+        COUNT(*),
+        COUNT(cr.command_uuid),
+        COUNT(*) - COUNT(cr.command_uuid)
+    FROM commands c
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid
+    WHERE eq.id = '$UUID'
+    GROUP BY c.request_type
+    ORDER BY COUNT(*) DESC
+    LIMIT 15;")
+
+    # Build commands by type JSON array
+    CMDS_TYPE_JSON="["
+    FIRST=true
+    while IFS=$'\t' read -r REQ_TYPE TOTAL COMPLETED PEND; do
+        [ -z "$REQ_TYPE" ] && continue
+        if [ "$FIRST" = true ]; then
+            FIRST=false
+        else
+            CMDS_TYPE_JSON+=","
+        fi
+        CMDS_TYPE_JSON+="{\"request_type\":\"$REQ_TYPE\",\"total\":$TOTAL,\"completed\":$COMPLETED,\"pending\":$PEND}"
+    done <<< "$CMDS_BY_TYPE"
+    CMDS_TYPE_JSON+="]"
+
+    # Output final JSON - format matching frontend expectations
+    cat <<EOF
+{
+  "DEVICE_INFO": [{"uuid": "$DEV_UUID", "serial_number": "$DEV_SERIAL", "created_at": "$DEV_CREATED", "enrollment_type": "$ENR_TYPE", "enrollment_enabled": $ENR_ENABLED, "last_seen_at": "$LAST_SEEN", "minutes_since_last_seen": $MINS_AGO}],
+  "ACTIVITY_SUMMARY": [{"total_commands": $TOTAL_CMDS, "completed_commands": $COMPLETED_CMDS, "pending_commands": $PENDING_CMDS}],
+  "PENDING_COMMANDS": $PENDING_JSON,
+  "RECENT_CHECKINS": $CHECKINS_JSON,
+  "COMMANDS_BY_TYPE": $CMDS_TYPE_JSON
+}
+EOF
+    exit 0
+fi
+
+# INTERACTIVE MODE - original behavior
+echo "=== MDM ANALYZER for UUID: $UUID ==="
+echo
+
+show_menu() {
+    echo "Select analysis option:"
+    echo "1) Device basic info + enrollment status"
+    echo "2) All MDM commands sent to device"
+    echo "3) Command results (check-ins)"
+    echo "4) Pending/queued commands only"
+    echo "5) Complete command history with timing"
+    echo "6) Device activity summary"
+    echo "7) Recent check-ins (last 10)"
+    echo "8) All check-ins (complete history)"
+    echo "9) Failed commands only"
+    echo "10) Commands by type"
+    echo "11) Current full device status (from latest command result)"
+    echo "12) Full device report (all data)"
+    echo "0) Exit"
+    echo
+    echo -n "Choice: "
+}
+
+device_info() {
+    echo "=== DEVICE INFO ==="
+    mysql_query "
+    SELECT
+        d.id as device_uuid,
+        d.serial_number,
+        d.created_at as device_registered,
+        e.id as enrollment_id,
+        e.type as enrollment_type,
+        e.enabled,
+        e.last_seen_at,
+        TIMESTAMPDIFF(MINUTE, e.last_seen_at, NOW()) as minutes_since_last_seen
+    FROM devices d
+    LEFT JOIN enrollments e ON d.id = e.device_id
+    WHERE d.id = '$UUID';"
+
+    echo
+    echo "=== DEVICE DETAILS FROM AUTH ==="
+    mysql_query "
+    SELECT
+        CASE
+            WHEN authenticate LIKE '%<key>DeviceName</key>%'
+            THEN SUBSTRING(authenticate,
+                LOCATE('<string>', authenticate, LOCATE('<key>DeviceName</key>', authenticate)) + 8,
+                LOCATE('</string>', authenticate, LOCATE('<key>DeviceName</key>', authenticate)) -
+                LOCATE('<string>', authenticate, LOCATE('<key>DeviceName</key>', authenticate)) - 8)
+            ELSE 'N/A'
+        END as device_name,
+        CASE
+            WHEN authenticate LIKE '%<key>ProductName</key>%'
+            THEN SUBSTRING(authenticate,
+                LOCATE('<string>', authenticate, LOCATE('<key>ProductName</key>', authenticate)) + 8,
+                LOCATE('</string>', authenticate, LOCATE('<key>ProductName</key>', authenticate)) -
+                LOCATE('<string>', authenticate, LOCATE('<key>ProductName</key>', authenticate)) - 8)
+            ELSE 'N/A'
+        END as product_name,
+        CASE
+            WHEN authenticate LIKE '%<key>OSVersion</key>%'
+            THEN SUBSTRING(authenticate,
+                LOCATE('<string>', authenticate, LOCATE('<key>OSVersion</key>', authenticate)) + 8,
+                LOCATE('</string>', authenticate, LOCATE('<key>OSVersion</key>', authenticate)) -
+                LOCATE('<string>', authenticate, LOCATE('<key>OSVersion</key>', authenticate)) - 8)
+            ELSE 'N/A'
+        END as os_version,
+        CASE
+            WHEN authenticate LIKE '%<key>BuildVersion</key>%'
+            THEN SUBSTRING(authenticate,
+                LOCATE('<string>', authenticate, LOCATE('<key>BuildVersion</key>', authenticate)) + 8,
+                LOCATE('</string>', authenticate, LOCATE('<key>BuildVersion</key>', authenticate)) -
+                LOCATE('<string>', authenticate, LOCATE('<key>BuildVersion</key>', authenticate)) - 8)
+            ELSE 'N/A'
+        END as build_version
+    FROM devices
+    WHERE id = '$UUID' AND authenticate IS NOT NULL;"
+}
+
+all_commands() {
+    echo "=== ALL MDM COMMANDS ==="
+    mysql_query "
+    SELECT
+        c.command_uuid,
+        c.request_type,
+        c.created_at as command_sent,
+        cr.status,
+        cr.created_at as response_received,
+        LEFT(c.command, 100) as command_preview
+    FROM commands c
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid
+    WHERE eq.id = '$UUID'
+    ORDER BY c.created_at DESC;"
+}
+
+command_results() {
+    echo "=== COMMAND RESULTS (CHECK-INS) ==="
+    mysql_query "
+    SELECT
+        cr.command_uuid,
+        c.request_type,
+        cr.status,
+        cr.created_at as result_received,
+        LEFT(cr.result, 100) as result_preview
+    FROM command_results cr
+    JOIN commands c ON cr.command_uuid = c.command_uuid
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    WHERE eq.id = '$UUID'
+    ORDER BY cr.created_at DESC;"
+}
+
+pending_commands() {
+    echo "=== PENDING/QUEUED COMMANDS ==="
+    mysql_query "
+    SELECT
+        c.command_uuid,
+        c.request_type,
+        c.created_at as command_sent,
+        eq.active,
+        eq.priority,
+        TIMESTAMPDIFF(MINUTE, c.created_at, NOW()) as minutes_waiting
+    FROM commands c
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid
+    WHERE eq.id = '$UUID'
+    AND cr.command_uuid IS NULL
+    ORDER BY c.created_at DESC;"
+}
+
+command_history() {
+    echo "=== COMPLETE COMMAND HISTORY ==="
+    mysql_query "
+    SELECT
+        c.command_uuid,
+        c.request_type,
+        c.created_at as command_sent,
+        cr.status,
+        cr.created_at as response_received,
+        CASE
+            WHEN cr.created_at IS NOT NULL THEN
+                TIMESTAMPDIFF(SECOND, c.created_at, cr.created_at)
+            ELSE NULL
+        END as response_time_seconds,
+        eq.active,
+        eq.priority
+    FROM commands c
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid
+    WHERE eq.id = '$UUID'
+    ORDER BY c.created_at DESC;"
+}
+
+activity_summary() {
+    echo "=== DEVICE ACTIVITY SUMMARY ==="
+    mysql_query "
+    SELECT
+        e.last_seen_at,
+        e.enabled,
+        e.type as enrollment_type,
+        COUNT(c.command_uuid) as total_commands,
+        COUNT(cr.command_uuid) as completed_commands,
+        COUNT(c.command_uuid) - COUNT(cr.command_uuid) as pending_commands,
+        MAX(c.created_at) as last_command_sent,
+        MAX(cr.created_at) as last_response_received
+    FROM enrollments e
+    LEFT JOIN enrollment_queue eq ON e.id = eq.id
+    LEFT JOIN commands c ON eq.command_uuid = c.command_uuid
+    LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid
+    WHERE e.device_id = '$UUID'
+    GROUP BY e.id, e.last_seen_at, e.enabled, e.type;"
+}
+
+recent_checkins() {
+    echo "=== RECENT CHECK-INS (LAST 10) ==="
+    mysql_query "
+    SELECT
+        cr.created_at as check_in_time,
+        c.request_type,
+        cr.status,
+        TIMESTAMPDIFF(MINUTE, cr.created_at, NOW()) as minutes_ago
+    FROM command_results cr
+    JOIN commands c ON cr.command_uuid = c.command_uuid
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    WHERE eq.id = '$UUID'
+    ORDER BY cr.created_at DESC
+    LIMIT 10;"
+}
+
+all_checkins() {
+    echo "=== ALL CHECK-INS (COMPLETE HISTORY) ==="
+    mysql_query "
+    SELECT
+        cr.created_at as check_in_time,
+        c.request_type,
+        cr.status,
+        c.command_uuid,
+        TIMESTAMPDIFF(MINUTE, cr.created_at, NOW()) as minutes_ago,
+        DATE(cr.created_at) as date
+    FROM command_results cr
+    JOIN commands c ON cr.command_uuid = c.command_uuid
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    WHERE eq.id = '$UUID'
+    ORDER BY cr.created_at DESC;"
+}
+
+failed_commands() {
+    echo "=== FAILED COMMANDS ==="
+    mysql_query "
+    SELECT
+        c.command_uuid,
+        c.request_type,
+        c.created_at as command_sent,
+        cr.status,
+        LEFT(cr.result, 150) as error_info
+    FROM commands c
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    JOIN command_results cr ON c.command_uuid = cr.command_uuid
+    WHERE eq.id = '$UUID'
+    AND cr.status != 'Acknowledged'
+    ORDER BY c.created_at DESC;"
+}
+
+commands_by_type() {
+    echo "=== COMMANDS BY TYPE ==="
+    mysql_query "
+    SELECT
+        c.request_type,
+        COUNT(*) as command_count,
+        COUNT(cr.command_uuid) as completed,
+        COUNT(*) - COUNT(cr.command_uuid) as pending,
+        MAX(c.created_at) as last_sent
+    FROM commands c
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid
+    WHERE eq.id = '$UUID'
+    GROUP BY c.request_type
+    ORDER BY command_count DESC;"
+}
+
+current_full_device_status() {
+    echo "=== CURRENT FULL DEVICE STATUS (from latest command result) ==="
+    mysql_query "
+    SELECT
+        d.id as device_uuid,
+        CASE
+            WHEN cr.result LIKE '%<key>DeviceName</key>%'
+            THEN SUBSTRING(cr.result,
+                LOCATE('<string>', cr.result, LOCATE('<key>DeviceName</key>', cr.result)) + 8,
+                LOCATE('</string>', cr.result, LOCATE('<key>DeviceName</key>', cr.result)) -
+                LOCATE('<string>', cr.result, LOCATE('<key>DeviceName</key>', cr.result)) - 8)
+            ELSE 'N/A'
+        END as device_name,
+        CASE
+            WHEN cr.result LIKE '%<key>OSVersion</key>%'
+            THEN SUBSTRING(cr.result,
+                LOCATE('<string>', cr.result, LOCATE('<key>OSVersion</key>', cr.result)) + 8,
+                LOCATE('</string>', cr.result, LOCATE('<key>OSVersion</key>', cr.result)) -
+                LOCATE('<string>', cr.result, LOCATE('<key>OSVersion</key>', cr.result)) - 8)
+            ELSE 'N/A'
+        END as os_version,
+        CASE
+            WHEN cr.result LIKE '%<key>SerialNumber</key>%'
+            THEN SUBSTRING(cr.result,
+                LOCATE('<string>', cr.result, LOCATE('<key>SerialNumber</key>', cr.result)) + 8,
+                LOCATE('</string>', cr.result, LOCATE('<key>SerialNumber</key>', cr.result)) -
+                LOCATE('<string>', cr.result, LOCATE('<key>SerialNumber</key>', cr.result)) - 8)
+            ELSE 'N/A'
+        END as serial_number,
+        cr.created_at as last_checkin_time,
+        cr.status as last_checkin_status
+    FROM command_results cr
+    JOIN commands c ON cr.command_uuid = c.command_uuid
+    JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+    JOIN devices d ON eq.id = d.id
+    WHERE eq.id = '$UUID'
+    ORDER BY cr.created_at DESC
+    LIMIT 1;"
+}
+
+full_report() {
+    echo "=== FULL DEVICE REPORT ==="
+    device_info
+    echo
+    activity_summary
+    echo
+    commands_by_type
+    echo
+    pending_commands
+    echo
+    recent_checkins
+    echo
+    current_full_device_status
+}
+
+while true; do
+    show_menu
+    read choice
+    echo
+
+    case $choice in
+        1) device_info ;;
+        2) all_commands ;;
+        3) command_results ;;
+        4) pending_commands ;;
+        5) command_history ;;
+        6) activity_summary ;;
+        7) recent_checkins ;;
+        8) all_checkins ;;
+        9) failed_commands ;;
+        10) commands_by_type ;;
+        11) current_full_device_status ;;
+        12) full_report ;;
+        0) echo "Exit."; exit 0 ;;
+        *) echo "Invalid choice." ;;
+    esac
+
+    echo
+    echo "Press Enter to continue..."
+    read
+    echo
+done
