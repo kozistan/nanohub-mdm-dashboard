@@ -926,6 +926,7 @@ def execute_bulk_new_device_installation(params, user_info):
     hostname = sanitize_param(params.get('hostname', ''))
     install_filevault = params.get('install_filevault', 'no')
     install_wireguard = params.get('install_wireguard', 'no')
+    wireguard_username = sanitize_param(params.get('wireguard_username', ''))
 
     if not branch or not platform or not udid:
         return {'success': False, 'error': 'Missing required fields: branch, platform, udid'}
@@ -1066,17 +1067,20 @@ def execute_bulk_new_device_installation(params, user_info):
             install_profile('company.macos.Filevault.profile.signed.mobileconfig')
 
         # WireGuard profile (Karlin only)
-        if branch == 'karlin' and install_wireguard == 'yes' and hostname:
+        if branch == 'karlin' and install_wireguard == 'yes' and wireguard_username:
             output_lines.append("\n[PHASE 7] Installing WireGuard profile...")
 
-            # Search for WireGuard profile
-            wg_search_path = os.path.join(profiles_dir, 'wireguard_configs', '30_account', 'macos')
-            wg_pattern = os.path.join(wg_search_path, f'*{hostname}*.signed.mobileconfig')
+            # Search for WireGuard profile in ALL subdirectories under wireguard_configs
+            # Pattern: *{username}*.signed.mobileconfig (fulltext search)
+            wg_base_path = os.path.join(profiles_dir, 'wireguard_configs')
+            wg_pattern = os.path.join(wg_base_path, '*', 'macos', f'*{wireguard_username}*.signed.mobileconfig')
             wg_profiles = glob.glob(wg_pattern)
 
             if wg_profiles:
                 wg_profile = wg_profiles[0]
-                output_lines.append(f"Found WireGuard profile: {os.path.basename(wg_profile)}")
+                # Show which department/folder the profile was found in
+                wg_folder = os.path.basename(os.path.dirname(os.path.dirname(wg_profile)))
+                output_lines.append(f"Found WireGuard profile in '{wg_folder}': {os.path.basename(wg_profile)}")
                 success, msg = run_command('install_profile', udid, wg_profile)
                 if success:
                     output_lines.append(f"  [OK] WireGuard profile installed")
@@ -1084,8 +1088,8 @@ def execute_bulk_new_device_installation(params, user_info):
                     output_lines.append(f"  [ERROR] WireGuard installation failed: {msg}")
                     errors.append(f"WireGuard: {msg}")
             else:
-                output_lines.append(f"  [WARNING] No WireGuard profile found for hostname: {hostname}")
-                output_lines.append(f"  Searched in: {wg_search_path}")
+                output_lines.append(f"  [WARNING] No WireGuard profile found for username: {wireguard_username}")
+                output_lines.append(f"  Searched in: {wg_base_path}/*/macos/*{wireguard_username}*.signed.mobileconfig")
 
     # iOS Installation
     elif platform == 'ios':
@@ -1095,6 +1099,31 @@ def execute_bulk_new_device_installation(params, user_info):
         install_profile('company.ios.Account-Disabled.profile.signed.mobileconfig')
         install_profile('company.ios.Restrictions.profile.signed.mobileconfig')
         install_profile('company.ios.whitelist.signed.mobileconfig')
+
+        # WireGuard profile for iOS (Karlin only)
+        if branch == 'karlin' and install_wireguard == 'yes' and wireguard_username:
+            output_lines.append("\n[PHASE 2] Installing WireGuard profile...")
+
+            # Search for WireGuard profile in ALL subdirectories under wireguard_configs
+            # Pattern: *{username}*.signed.mobileconfig (fulltext search)
+            wg_base_path = os.path.join(profiles_dir, 'wireguard_configs')
+            wg_pattern = os.path.join(wg_base_path, '*', 'ios', f'*{wireguard_username}*.signed.mobileconfig')
+            wg_profiles = glob.glob(wg_pattern)
+
+            if wg_profiles:
+                wg_profile = wg_profiles[0]
+                # Show which department/folder the profile was found in
+                wg_folder = os.path.basename(os.path.dirname(os.path.dirname(wg_profile)))
+                output_lines.append(f"Found WireGuard profile in '{wg_folder}': {os.path.basename(wg_profile)}")
+                success, msg = run_command('install_profile', udid, wg_profile)
+                if success:
+                    output_lines.append(f"  [OK] WireGuard profile installed")
+                else:
+                    output_lines.append(f"  [ERROR] WireGuard installation failed: {msg}")
+                    errors.append(f"WireGuard: {msg}")
+            else:
+                output_lines.append(f"  [WARNING] No WireGuard profile found for username: {wireguard_username}")
+                output_lines.append(f"  Searched in: {wg_base_path}/*/ios/*{wireguard_username}*.signed.mobileconfig")
 
     # Summary
     output_lines.append("\n" + "=" * 60)

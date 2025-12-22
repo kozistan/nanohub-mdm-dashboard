@@ -63,8 +63,10 @@ COMMANDS = {
             {'name': 'install_wireguard', 'label': 'Install WireGuard Profile', 'type': 'select', 'required': False,
              'options': [
                  {'value': 'no', 'label': 'No - Skip WireGuard'},
-                 {'value': 'yes', 'label': 'Yes - Search by hostname'},
+                 {'value': 'yes', 'label': 'Yes - Search by username'},
              ]},
+            {'name': 'wireguard_username', 'label': 'WireGuard Username (for profile search)', 'type': 'string', 'required': False,
+             'placeholder': 'e.g. j.smith or smith'},
         ],
         'dangerous': False,
         'min_role': 'operator',
