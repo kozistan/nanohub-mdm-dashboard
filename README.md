@@ -2,8 +2,8 @@
 
 Web-based management dashboard for Apple MDM (Mobile Device Management) using NanoHUB backend with LDAP authentication and comprehensive admin panel.
 
-**Version:** 1.6
-**Last Updated:** 2025-12-17
+**Version:** 1.7
+**Last Updated:** 2026-01-05
 
 ## Features
 
@@ -18,7 +18,7 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Device Setup**: Automated installation workflows for new devices
 - **Profiles**: Install, remove, list profiles (bulk operations supported)
 - **Applications**: Install and manage applications
-- **Device Control**: Lock, unlock, restart, erase devices
+- **Device Control**: Lock, unlock (ClearPasscode with UnlockToken for supervised iOS), restart, erase devices
 - **OS Updates**: Schedule and manage OS updates (with device selection, platform-specific options)
 - **Remote Desktop**: Enable/disable remote access (including bulk operations)
 - **Security**: Lost mode, security info

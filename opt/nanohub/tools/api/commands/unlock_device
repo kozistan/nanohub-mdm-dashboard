@@ -1,68 +1,52 @@
 #!/bin/bash
-# device_unlock.sh - Unlock device using PIN or UnlockToken
-# Usage: ./device_unlock.sh <UDID> [PIN]
+# clear_passcode.sh - Clear device passcode using MDM ClearPasscode command
+# Usage: ./unlock_device <UDID>
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <UDID> [PIN]"
+    echo "Usage: $0 <UDID>"
     echo "Example: $0 00008020-0001713C1E90003A"
-    echo "Example: $0 00008020-0001713C1E90003A 123456"
-    echo ""
-    echo "Note: If no PIN provided, uses UnlockToken from enrollment"
     exit 1
 fi
 
 UDID="$1"
-PIN="$2"
-
 CMD_UUID=$(uuidgen)
 
-# Vytvoř DeviceUnlock command (unique temp file for parallel execution)
-TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
-if [ -n "$PIN" ]; then
-    # Unlock s PIN
-    cat > "$TEMP_PLIST" << PLIST_EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Command</key>
-    <dict>
-        <key>RequestType</key>
-        <string>DeviceUnlock</string>
-        <key>PIN</key>
-        <string>$PIN</string>
-    </dict>
-    <key>CommandUUID</key>
-    <string>$CMD_UUID</string>
-</dict>
-</plist>
-PLIST_EOF
-    echo "Unlocking device with PIN: $PIN"
-else
-    # Unlock s UnlockToken (automatický)
-    cat > "$TEMP_PLIST" << PLIST_EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Command</key>
-    <dict>
-        <key>RequestType</key>
-        <string>DeviceUnlock</string>
-    </dict>
-    <key>CommandUUID</key>
-    <string>$CMD_UUID</string>
-</dict>
-</plist>
-PLIST_EOF
-    echo "Unlocking device with UnlockToken"
+# Fetch UnlockToken from database (remove all newlines from base64)
+UNLOCK_TOKEN=$(mysql -h 127.0.0.1 -u nanohub -p'YOUR_DATABASE_PASSWORD' nanohub -N -s -e \
+    "SELECT TO_BASE64(unlock_token) FROM devices WHERE id='$UDID';" 2>/dev/null | tr -d '\n\r' | sed 's/\\n//g')
+
+if [ -z "$UNLOCK_TOKEN" ]; then
+    echo "Error: No UnlockToken found for device $UDID"
+    echo "Device must be supervised and enrolled with UnlockToken escrow enabled"
+    exit 1
 fi
 
+echo "Sending ClearPasscode command to device"
 echo "Device UDID: $UDID"
 echo "Command UUID: $CMD_UUID"
 
+# Create ClearPasscode command with UnlockToken
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+cat > "$TEMP_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>ClearPasscode</string>
+        <key>UnlockToken</key>
+        <data>$UNLOCK_TOKEN</data>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
 RESPONSE=$(curl -s -T "$TEMP_PLIST" \
-  -u "nanohub:ddce14cd1184371050150aaeaef30d65ae5441a3d5ccdf3099cd815f3bb5c774" \
+  -u "nanohub:YOUR_NANOMDM_API_KEY" \
   -w "HTTP_CODE:%{http_code}" \
   "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
 
@@ -72,8 +56,8 @@ BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
 rm -f "$TEMP_PLIST"
 
 if [ "$HTTP_CODE" = "200" ]; then
-    echo "Device unlock command sent successfully!"
+    echo "ClearPasscode command sent successfully!"
 else
-    echo "Failed to send device unlock command (HTTP: $HTTP_CODE)"
+    echo "Failed to send ClearPasscode command (HTTP: $HTTP_CODE)"
     echo "Response: $BODY"
 fi

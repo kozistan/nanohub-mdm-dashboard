@@ -219,9 +219,9 @@ COMMANDS = {
         'bulk_supported': False,
     },
     'unlock_device': {
-        'name': 'Unlock Device',
+        'name': 'Unlock Device (Clear Passcode)',
         'category': 'device_control',
-        'description': 'Clear passcode and unlock device',
+        'description': 'Clear passcode using ClearPasscode MDM command with UnlockToken (supervised iOS devices)',
         'script': 'unlock_device',
         'parameters': [
             {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
@@ -230,6 +230,7 @@ COMMANDS = {
         'danger_level': 'medium',
         'min_role': 'operator',
         'bulk_supported': False,
+        'info_text': 'Sends ClearPasscode command with UnlockToken from database. Device must be supervised with UnlockToken escrow enabled.',
     },
     'restart_device': {
         'name': 'Restart Device',
