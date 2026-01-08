@@ -38,8 +38,8 @@ if [ ! -f "$PROFILE_PATH" ]; then
 fi
 
 # Source environment variables
-if [[ -f /home/microm/nanohub/environment.sh ]]; then
-  source /home/microm/nanohub/environment.sh
+if [[ -f /home/user/nanohub/environment.sh ]]; then
+  source /home/user/nanohub/environment.sh
 fi
 
 echo "Starting bulk profile installation"

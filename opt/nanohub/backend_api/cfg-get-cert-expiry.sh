@@ -1,21 +1,37 @@
 #!/bin/bash
 # NanoHUB Certificate and Token Expiry Script
-# Shows expiry dates for: DEP Token, VPP Token, MDM Vendor Cert, APNs Push Cert
+# Shows expiry dates for all MDM tokens and certificates
 # Output format: name|usage|expiry|renewal_url
 
-CERTDIR="/opt/nanohub/dep"
+CERTDIR="/opt/nanohub/certs"
 ENV_FILE="/home/user/nanohub/environment.sh"
 
 # Renewal URLs
 URL_DEP="https://business.apple.com"
 URL_VPP="https://business.apple.com"
-URL_MDM_VENDOR="https://developer.apple.com/account"
+URL_APPLE_DEV="https://developer.apple.com/account"
 URL_APNS_PUSH="https://identity.apple.com/pushcert/"
+URL_APPLE_CERTS="https://www.apple.com/certificateauthority/"
+
+# Helper function to get cert expiry (handles both PEM and DER formats)
+get_cert_expiry() {
+    local cert_file="$1"
+    local format="${2:-PEM}"
+    if [ "$format" = "DER" ]; then
+        openssl x509 -in "$cert_file" -inform DER -noout -enddate 2>/dev/null | cut -d= -f2
+    else
+        openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d= -f2
+    fi
+}
 
 # Source environment for database credentials
 if [ -f "$ENV_FILE" ]; then
     source "$ENV_FILE"
 fi
+
+# ============================================
+# TOKENS (from database/environment)
+# ============================================
 
 # 1. DEP Token (from MySQL database)
 DEP_EXPIRY=$(mysql -h 127.0.0.1 -u nanohub -p'YOUR_DB_PASSWORD' dep -N -s -e \
@@ -32,7 +48,6 @@ try:
     d = json.load(sys.stdin)
     exp = d.get('expDate', '')
     if exp:
-        # Format: 2026-05-01T13:57:02+0000
         from datetime import datetime
         dt = datetime.strptime(exp[:19], '%Y-%m-%dT%H:%M:%S')
         print(dt.strftime('%b %d %H:%M:%S %Y'))
@@ -44,41 +59,63 @@ except:
     fi
 fi
 
+# ============================================
+# MDM CERTIFICATES (from /opt/nanohub/certs/)
+# ============================================
+
 # 3. MDM Vendor Certificate
-MDM_CERT="$CERTDIR/mdm_cert_clean.pem"
-if [ -f "$MDM_CERT" ] && [ -s "$MDM_CERT" ]; then
-    MDM_EXP=$(openssl x509 -in "$MDM_CERT" -noout -enddate 2>/dev/null | cut -d= -f2)
-    if [ -n "$MDM_EXP" ]; then
-        printf "%s|%s|%s|%s\n" "MDM Vendor Cert" "MDM Vendor Certificate" "$MDM_EXP" "$URL_MDM_VENDOR"
-    fi
+CERT="$CERTDIR/mdm_cert_clean.pem"
+if [ -f "$CERT" ] && [ -s "$CERT" ]; then
+    EXP=$(get_cert_expiry "$CERT" "PEM")
+    [ -n "$EXP" ] && printf "%s|%s|%s|%s\n" "MDM Vendor Cert" "MDM Vendor Certificate" "$EXP" "$URL_APPLE_DEV"
 fi
 
 # 4. APNs Push Certificate
-PUSH_CERT="$CERTDIR/MDM_ Your Name_Certificate.pem"
-if [ -f "$PUSH_CERT" ] && [ -s "$PUSH_CERT" ]; then
-    PUSH_EXP=$(openssl x509 -in "$PUSH_CERT" -noout -enddate 2>/dev/null | cut -d= -f2)
-    if [ -n "$PUSH_EXP" ]; then
-        printf "%s|%s|%s|%s\n" "APNs Push Cert" "Apple Push Notification Service" "$PUSH_EXP" "$URL_APNS_PUSH"
-    fi
+CERT="$CERTDIR/MDM_ Your Name_Certificate.pem"
+if [ -f "$CERT" ] && [ -s "$CERT" ]; then
+    EXP=$(get_cert_expiry "$CERT" "PEM")
+    [ -n "$EXP" ] && printf "%s|%s|%s|%s\n" "APNs Push Cert" "Apple Push Notification Service" "$EXP" "$URL_APNS_PUSH"
 fi
 
-# 5. Apple WWDR CA G3 Certificate
-APPLE_CERTS_DIR="/home/user/nanohub/certs"
-URL_APPLE_CERTS="https://www.apple.com/certificateauthority/"
+# ============================================
+# DEVELOPER CERTIFICATES (from /opt/nanohub/certs/)
+# ============================================
 
-WWDR_CERT="$APPLE_CERTS_DIR/AppleWWDRCAG3.pem"
-if [ -f "$WWDR_CERT" ] && [ -s "$WWDR_CERT" ]; then
-    WWDR_EXP=$(openssl x509 -in "$WWDR_CERT" -noout -enddate 2>/dev/null | cut -d= -f2)
-    if [ -n "$WWDR_EXP" ]; then
-        printf "%s|%s|%s|%s\n" "Apple WWDR CA G3" "Apple Worldwide Developer Relations" "$WWDR_EXP" "$URL_APPLE_CERTS"
-    fi
+# 5. Developer ID Application
+CERT="$CERTDIR/developerID_application.cer"
+if [ -f "$CERT" ] && [ -s "$CERT" ]; then
+    EXP=$(get_cert_expiry "$CERT" "DER")
+    [ -n "$EXP" ] && printf "%s|%s|%s|%s\n" "Developer ID App" "Developer ID Application (Team)" "$EXP" "$URL_APPLE_DEV"
 fi
 
-# 6. Apple Root CA Certificate
-ROOT_CERT="$APPLE_CERTS_DIR/AppleRootCA.pem"
-if [ -f "$ROOT_CERT" ] && [ -s "$ROOT_CERT" ]; then
-    ROOT_EXP=$(openssl x509 -in "$ROOT_CERT" -noout -enddate 2>/dev/null | cut -d= -f2)
-    if [ -n "$ROOT_EXP" ]; then
-        printf "%s|%s|%s|%s\n" "Apple Root CA" "Apple Root Certificate Authority" "$ROOT_EXP" "$URL_APPLE_CERTS"
-    fi
+# 6. Developer ID Installer
+CERT="$CERTDIR/developerID_installer.cer"
+if [ -f "$CERT" ] && [ -s "$CERT" ]; then
+    EXP=$(get_cert_expiry "$CERT" "DER")
+    [ -n "$EXP" ] && printf "%s|%s|%s|%s\n" "Developer ID Installer" "Developer ID Installer (Team)" "$EXP" "$URL_APPLE_DEV"
+fi
+
+# 7. Apple Development (Personal)
+CERT="$CERTDIR/development.cer"
+if [ -f "$CERT" ] && [ -s "$CERT" ]; then
+    EXP=$(get_cert_expiry "$CERT" "DER")
+    [ -n "$EXP" ] && printf "%s|%s|%s|%s\n" "Apple Development" "Personal Development Certificate" "$EXP" "$URL_APPLE_DEV"
+fi
+
+# ============================================
+# APPLE ROOT CERTIFICATES (from /opt/nanohub/certs/)
+# ============================================
+
+# 8. Apple WWDR CA G3
+CERT="$CERTDIR/AppleWWDRCAG3.pem"
+if [ -f "$CERT" ] && [ -s "$CERT" ]; then
+    EXP=$(get_cert_expiry "$CERT" "PEM")
+    [ -n "$EXP" ] && printf "%s|%s|%s|%s\n" "Apple WWDR CA G3" "Apple Worldwide Developer Relations" "$EXP" "$URL_APPLE_CERTS"
+fi
+
+# 9. Apple Root CA
+CERT="$CERTDIR/AppleRootCA.pem"
+if [ -f "$CERT" ] && [ -s "$CERT" ]; then
+    EXP=$(get_cert_expiry "$CERT" "PEM")
+    [ -n "$EXP" ] && printf "%s|%s|%s|%s\n" "Apple Root CA" "Apple Root Certificate Authority" "$EXP" "$URL_APPLE_CERTS"
 fi

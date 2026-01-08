@@ -2,8 +2,8 @@
 
 Web-based management dashboard for Apple MDM (Mobile Device Management) using NanoHUB backend with LDAP authentication and comprehensive admin panel.
 
-**Version:** 1.7
-**Last Updated:** 2026-01-05
+**Version:** 1.8
+**Last Updated:** 2026-01-08
 
 ## Features
 
