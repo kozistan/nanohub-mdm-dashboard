@@ -43,7 +43,7 @@ executor = ThreadPoolExecutor(max_workers=10)
 DB_CONFIG = {
     'host': '127.0.0.1',
     'user': 'nanohub',
-    'password': 'YOUR_DATABASE_PASSWORD',
+    'password': 'YOUR_DB_PASSWORD',
     'database': 'nanohub'
 }
 
@@ -69,6 +69,9 @@ def login_required_admin(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'user' not in session:
+            # Return JSON error for AJAX requests, redirect for regular requests
+            if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({'success': False, 'error': 'Session expired. Please log in again.'}), 401
             return redirect(url_for('login', next=request.url))
         return f(*args, **kwargs)
     return decorated_function
@@ -83,10 +86,10 @@ def get_hostname_for_uuid(uuid):
     try:
         import mysql.connector
         conn = mysql.connector.connect(
-            host=os.environ.get('DB_HOST', 'localhost'),
-            user=os.environ.get('DB_USER', 'nanohub'),
-            password=os.environ.get('DB_PASSWORD', ''),
-            database=os.environ.get('DB_NAME', 'nanohub')
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database']
         )
         cursor = conn.cursor()
         cursor.execute("SELECT hostname FROM device_inventory WHERE uuid = %s", (uuid,))
@@ -379,7 +382,11 @@ def execute_command(cmd_id, params, user_info):
                 return {'success': False, 'error': f'Missing required parameter: {param_name}'}
 
             if param_value:
-                param_value = sanitize_param(str(param_value))
+                # Handle 'devices' type - convert list to comma-separated string
+                if param_def['type'] == 'devices' and isinstance(param_value, list):
+                    param_value = ','.join([sanitize_param(str(d)) for d in param_value if d])
+                else:
+                    param_value = sanitize_param(str(param_value))
 
                 if param_def['type'] == 'profile':
                     if not param_value.startswith('/'):
@@ -924,6 +931,7 @@ def execute_bulk_new_device_installation(params, user_info):
     udid = sanitize_param(params.get('udid', ''))
     munki_type = params.get('munki_type', 'default')
     hostname = sanitize_param(params.get('hostname', ''))
+    install_directory_services = params.get('install_directory_services', 'no')
     install_filevault = params.get('install_filevault', 'no')
     install_wireguard = params.get('install_wireguard', 'no')
     wireguard_username = sanitize_param(params.get('wireguard_username', ''))
@@ -1037,15 +1045,15 @@ def execute_bulk_new_device_installation(params, user_info):
 
         # Applications
         install_application('https://repo.example.com/munki/company_mdmagent.plist')
-        install_application('https://repo.example.com/munki/company_munki.plist')
+        install_application('https://repo.example.com/munki/company_munki7.plist')
 
         # Branch-specific applications for Karlin
         if branch == 'karlin':
             install_application('https://repo.example.com/munki/company_drivemap.plist')
             install_application('https://repo.example.com/munki/company_removeadmin_manifest.plist')
 
-        # Directory Services (Karlin only, if hostname provided)
-        if branch == 'karlin' and hostname:
+        # Directory Services (Karlin only, if enabled and hostname provided)
+        if branch == 'karlin' and install_directory_services == 'yes' and hostname:
             output_lines.append("\n[PHASE 5] Setting up Directory Services...")
 
             # Set hostname first

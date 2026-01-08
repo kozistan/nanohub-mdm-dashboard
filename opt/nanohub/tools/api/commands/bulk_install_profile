@@ -3,32 +3,33 @@
 # NanoHUB Bulk Install Profile Script
 #
 # Description:
-# This script installs a specified profile to all devices listed in the data/devices.json file,
-# filtered by the 'ios' or 'macos' operating system parameter.
+# This script installs a specified profile to multiple devices.
+# Devices can be specified as comma-separated UUIDs.
 #
 # Usage:
-#   ./bulk_install_profile.sh <ios|macos> <profile.mobileconfig>
+#   ./bulk_install_profile <device_uuids> <profile.mobileconfig>
 #
 # Parameters:
-#   <ios|macos>            - Target OS for profile install
+#   <device_uuids>         - Comma-separated list of device UUIDs
 #   <profile.mobileconfig> - Path to the profile to be installed
 #
 # Example:
-#   ./bulk_install_profile ios /path/to/ios_profile.mobileconfig
-#   ./bulk_install_profile macos /path/to/macos_profile.mobileconfig
+#   ./bulk_install_profile "uuid1,uuid2,uuid3" /path/to/profile.mobileconfig
 #
 # Requirements:
-#   - 'jq' JSON processor installed on system
 #   - Profile file must exist
 #   - NanoMDM API running and accessible
 #
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 if [ "$#" -ne 2 ]; then
-  echo "Usage: $0 <ios|macos> <profile.mobileconfig>"
+  echo "Usage: $0 <device_uuids> <profile.mobileconfig>"
+  echo "  device_uuids: Comma-separated list of device UUIDs"
   exit 1
 fi
 
-TARGET_OS="$1"
+DEVICES="$1"
 PROFILE_PATH="$2"
 
 if [ ! -f "$PROFILE_PATH" ]; then
@@ -36,36 +37,31 @@ if [ ! -f "$PROFILE_PATH" ]; then
   exit 1
 fi
 
-# Source environment variables for DB credentials
-if [[ -f /opt/nanohub/environment.sh ]]; then
-  source /opt/nanohub/environment.sh
-else
-  echo "Error: /opt/nanohub/environment.sh not found!"
-  exit 1
+# Source environment variables
+if [[ -f /home/microm/nanohub/environment.sh ]]; then
+  source /home/microm/nanohub/environment.sh
 fi
 
-echo "Starting bulk profile installation for OS: $TARGET_OS"
+echo "Starting bulk profile installation"
 echo "Using profile: $PROFILE_PATH"
 
-# Extract device UUIDs matching the target OS using SQL
-DEVICE_UUIDS=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -sN -e "SELECT uuid FROM device_inventory WHERE os='$TARGET_OS' ORDER BY hostname" 2>/dev/null)
+# Convert comma-separated list to array
+IFS=',' read -ra DEVICE_ARRAY <<< "$DEVICES"
 
-if [ -z "$DEVICE_UUIDS" ]; then
-  echo "No devices found for OS: $TARGET_OS"
-  exit 0
-fi
-
-# Count devices
-DEVICE_COUNT=$(echo "$DEVICE_UUIDS" | wc -l)
-echo "Found $DEVICE_COUNT device(s)"
+DEVICE_COUNT=${#DEVICE_ARRAY[@]}
+echo "Target devices: $DEVICE_COUNT"
 echo ""
 echo "Starting parallel execution..."
 echo ""
 
 # Parallel execution - all commands run simultaneously
-for UDID in $DEVICE_UUIDS; do
-  echo "Installing profile on device UDID: $UDID"
-  ./tools/api/commands/install_profile "$UDID" "$PROFILE_PATH" &
+for UDID in "${DEVICE_ARRAY[@]}"; do
+  # Trim whitespace
+  UDID=$(echo "$UDID" | xargs)
+  if [ -n "$UDID" ]; then
+    echo "Installing profile on device: $UDID"
+    "$SCRIPT_DIR/install_profile" "$UDID" "$PROFILE_PATH" &
+  fi
 done
 
 # Wait for all background jobs to complete
