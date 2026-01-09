@@ -44,7 +44,7 @@ COMMANDS = {
     'bulk_new_device_installation': {
         'name': 'New Device Installation',
         'category': 'setup',
-        'description': 'Automated installation workflow for new devices (Karlin/Belehradska branches)',
+        'description': 'Automated installation workflow for new devices (Site A/B branches)',
         'script': '_internal_bulk_install',
         'parameters': [
             {'name': 'branch', 'label': 'Branch', 'type': 'select', 'required': True,
@@ -196,12 +196,12 @@ COMMANDS = {
             {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
             {'name': 'set_name', 'label': 'DDM Set', 'type': 'select', 'required': True,
              'options': [
-                 {'value': 'sloto-macos-karlin-default', 'label': 'macOS Karlin Default'},
-                 {'value': 'sloto-macos-karlin-tech', 'label': 'macOS Karlin Tech'},
-                 {'value': 'sloto-macos-bel-default', 'label': 'macOS Belehradska Default'},
-                 {'value': 'sloto-macos-bel-tech', 'label': 'macOS Belehradska Tech'},
-                 {'value': 'sloto-ios-karlin', 'label': 'iOS Karlin'},
-                 {'value': 'sloto-ios-bel', 'label': 'iOS Belehradska'},
+                 {'value': 'macos-site-a-default', 'label': 'macOS Site A Default'},
+                 {'value': 'macos-site-a-tech', 'label': 'macOS Site A Tech'},
+                 {'value': 'macos-site-b-default', 'label': 'macOS Site B Default'},
+                 {'value': 'macos-site-b-tech', 'label': 'macOS Site B Tech'},
+                 {'value': 'ios-site-a', 'label': 'iOS Site A'},
+                 {'value': 'ios-site-b', 'label': 'iOS Site B'},
              ]},
         ],
         'dangerous': False,
@@ -219,12 +219,12 @@ COMMANDS = {
             {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
             {'name': 'set_name', 'label': 'DDM Set', 'type': 'select', 'required': True,
              'options': [
-                 {'value': 'sloto-macos-karlin-default', 'label': 'macOS Karlin Default'},
-                 {'value': 'sloto-macos-karlin-tech', 'label': 'macOS Karlin Tech'},
-                 {'value': 'sloto-macos-bel-default', 'label': 'macOS Belehradska Default'},
-                 {'value': 'sloto-macos-bel-tech', 'label': 'macOS Belehradska Tech'},
-                 {'value': 'sloto-ios-karlin', 'label': 'iOS Karlin'},
-                 {'value': 'sloto-ios-bel', 'label': 'iOS Belehradska'},
+                 {'value': 'macos-site-a-default', 'label': 'macOS Site A Default'},
+                 {'value': 'macos-site-a-tech', 'label': 'macOS Site A Tech'},
+                 {'value': 'macos-site-b-default', 'label': 'macOS Site B Default'},
+                 {'value': 'macos-site-b-tech', 'label': 'macOS Site B Tech'},
+                 {'value': 'ios-site-a', 'label': 'iOS Site A'},
+                 {'value': 'ios-site-b', 'label': 'iOS Site B'},
              ]},
         ],
         'dangerous': False,
@@ -915,8 +915,8 @@ def get_available_profiles():
 
 def check_role_permission(user_role, required_role):
     """Check if user role meets minimum requirement"""
-    # bel-admin has same permission level as admin, just filtered by manifest
-    role_hierarchy = {'admin': 3, 'bel-admin': 3, 'operator': 2, 'report': 1}
+    # restricted-admin has same permission level as admin, just filtered by manifest
+    role_hierarchy = {'admin': 3, 'restricted-admin': 3, 'operator': 2, 'report': 1}
     return role_hierarchy.get(user_role, 0) >= role_hierarchy.get(required_role, 0)
 
 

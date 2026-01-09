@@ -21,7 +21,7 @@ usage() {
     echo ""
     echo "Arguments:"
     echo "  device_udids - Comma-separated list of device UDIDs"
-    echo "  set_name     - DDM set name (e.g., sloto-macos-karlin-default)"
+    echo "  set_name     - DDM set name (e.g., macos-default)"
     exit 1
 }
 

@@ -2,7 +2,7 @@
 
 Web-based management dashboard for Apple MDM (Mobile Device Management) using NanoHUB backend with LDAP authentication and comprehensive admin panel.
 
-**Version:** 1.9
+**Version:** 2.0
 **Last Updated:** 2026-01-09
 
 ## Features
@@ -15,7 +15,7 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Parallel Execution**: 10-20x faster bulk operations with race condition fixes
 - **DDM Support**: Declarative Device Management with KMFDDM integration
 
-### Admin Panel (45 commands, 11 categories)
+### Admin Panel (45+ commands, 11 categories)
 - **Device Setup**: Automated installation workflows for new devices
 - **Profiles**: Install, remove, list profiles (bulk operations supported)
 - **Applications**: Install and manage applications
@@ -24,9 +24,23 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Remote Desktop**: Enable/disable remote access (including bulk operations)
 - **Security**: Lost mode, security info
 - **Diagnostics**: Device information, MDM analyzer, system reports
-- **VPP Apps**: Volume Purchase Program app management
+- **VPP Apps**: Volume Purchase Program app management with visual panel
 - **Database Tools**: Device inventory CRUD operations
 - **DDM**: Declarative Device Management - status, assign sets, upload declarations
+
+### VPP Panel (NEW in v2.0)
+- **Token Management**: VPP token status with expiration warnings
+- **License Overview**: Total apps, licenses, assigned/available counts
+- **App Browser**: Visual app list with icons from iTunes API
+- **Filtering**: By platform (iOS/macOS), search by name, low license alerts
+- **Install/Remove**: Direct app installation and removal to selected devices
+
+### Command History (NEW in v2.0)
+- **MySQL Storage**: Persistent command history with 90-day retention
+- **Detailed Logging**: Command name, parameters, device info, results
+- **Filtering**: By date range, device, user, success/failure status
+- **Pagination**: Browse through historical commands
+- **Automatic Cleanup**: Daily cleanup of records older than 90 days
 
 ### Role-Based Access Control
 
@@ -34,7 +48,7 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 |----------|------|--------|
 | `it` | admin | Full access to all devices |
 | `mdm-admin` | admin | Full access to all devices |
-| `mdm-bel-admin` | bel-admin | Full access, filtered by manifest |
+| `mdm-restricted-admin` | restricted-admin | Full access, filtered by manifest |
 | `mdm-operator` | operator | Device management, profiles, apps |
 | `mdm-report` | report | Read-only access |
 
@@ -169,20 +183,43 @@ GRANT ALL PRIVILEGES ON nanohub.* TO 'nanohub'@'localhost';
 CREATE TABLE IF NOT EXISTS device_inventory (
     id INT AUTO_INCREMENT PRIMARY KEY,
     uuid VARCHAR(255) UNIQUE NOT NULL,
-    serial VARCHAR(255),
-    os VARCHAR(50),
-    hostname VARCHAR(255),
-    manifest VARCHAR(100) DEFAULT 'default',
-    account VARCHAR(100) DEFAULT 'disabled',
+    serial VARCHAR(127),
+    os VARCHAR(10),
+    hostname VARCHAR(127),
+    manifest VARCHAR(127) DEFAULT 'default',
+    account VARCHAR(20) DEFAULT 'disabled',
     dep VARCHAR(20) DEFAULT '0',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_hostname (hostname),
     INDEX idx_serial (serial),
-    INDEX idx_manifest (manifest)
+    INDEX idx_manifest (manifest),
+    INDEX idx_os (os)
 );
 
--- Audit log table
+-- Command history table (NEW in v2.0)
+CREATE TABLE IF NOT EXISTS command_history (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    user VARCHAR(100) NOT NULL,
+    command_id VARCHAR(100) NOT NULL,
+    command_name VARCHAR(255) NOT NULL,
+    device_udid VARCHAR(100),
+    device_serial VARCHAR(50),
+    device_hostname VARCHAR(255),
+    params TEXT,
+    result_summary TEXT,
+    success TINYINT(1) NOT NULL DEFAULT 0,
+    execution_time_ms INT,
+    INDEX idx_timestamp (timestamp),
+    INDEX idx_device_udid (device_udid),
+    INDEX idx_device_serial (device_serial),
+    INDEX idx_device_hostname (device_hostname),
+    INDEX idx_user (user),
+    INDEX idx_command_id (command_id)
+);
+
+-- Audit log table (legacy)
 CREATE TABLE IF NOT EXISTS admin_audit_log (
     id INT AUTO_INCREMENT PRIMARY KEY,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -253,14 +290,14 @@ Configure AD groups in `nanohub_ldap_auth.py`:
 GROUP_ROLE_MAPPING = {
     'it': 'admin',
     'mdm-admin': 'admin',
-    'mdm-bel-admin': 'bel-admin',
+    'mdm-restricted-admin': 'restricted-admin',
     'mdm-operator': 'operator',
     'mdm-report': 'report',
 }
 
 # Manifest filters for restricted roles
 ROLE_MANIFEST_FILTER = {
-    'bel-admin': 'bel-%',  # Only sees devices with bel-* manifests
+    'restricted-admin': 'site-%',  # Only sees devices with site-* manifests
 }
 ```
 
@@ -268,10 +305,10 @@ ROLE_MANIFEST_FILTER = {
 
 To add a new restricted admin role:
 
-1. Create AD group (e.g., `mdm-xyz-admin`)
-2. Add to `GROUP_ROLE_MAPPING`: `'mdm-xyz-admin': 'xyz-admin'`
-3. Add to `ROLE_PERMISSIONS`: `'xyz-admin': ['admin', 'operator', 'report', ...]`
-4. Add manifest filter: `ROLE_MANIFEST_FILTER['xyz-admin'] = 'xyz-%'`
+1. Create AD group (e.g., `mdm-site-admin`)
+2. Add to `GROUP_ROLE_MAPPING`: `'mdm-site-admin': 'site-admin'`
+3. Add to `ROLE_PERMISSIONS`: `'site-admin': ['admin', 'operator', 'report', ...]`
+4. Add manifest filter: `ROLE_MANIFEST_FILTER['site-admin'] = 'site-%'`
 5. Update role hierarchy in `command_registry.py`
 6. Restart nanohub-web service
 
@@ -281,6 +318,9 @@ To add a new restricted admin role:
 
 - **Main Dashboard**: `https://mdm.example.com:8000/`
 - **Admin Panel**: `https://mdm.example.com:8000/admin`
+- **Command History**: `https://mdm.example.com:8000/admin/history`
+- **VPP Panel**: `https://mdm.example.com:8000/admin/vpp`
+- **Profiles**: `https://mdm.example.com:8000/admin/profiles`
 - **Login**: `https://mdm.example.com:8000/login`
 
 ### Admin Panel Operations
@@ -291,6 +331,15 @@ To add a new restricted admin role:
 4. Fill in required parameters
 5. Execute command
 6. View results
+
+### VPP Panel
+
+1. Navigate to VPP tab in Admin Panel
+2. View license counts and token expiration
+3. Filter apps by platform or search
+4. Click Install/Remove on any app
+5. Select target devices in modal
+6. Execute action
 
 ### Device Manager
 
@@ -318,7 +367,11 @@ Automated workflow for provisioning new devices:
 
 ### Admin Panel
 - `GET /admin` - Admin dashboard
+- `GET /admin/history` - Command history
+- `GET /admin/vpp` - VPP license panel
+- `GET /admin/profiles` - Profile management
 - `POST /admin/execute` - Execute MDM command
+- `POST /admin/api/vpp-action` - Execute VPP install/remove
 - `GET /admin/api/devices` - Get all devices (with manifest filtering)
 - `POST /admin/api/device-search` - Search devices
 
@@ -355,6 +408,9 @@ python3 -c "from nanohub_ldap_auth import test_ldap_connection; test_ldap_connec
 ```bash
 # Test database connection
 mysql -h localhost -u nanohub -p nanohub -e "SELECT COUNT(*) FROM device_inventory"
+
+# Check command history
+mysql -h localhost -u nanohub -p nanohub -e "SELECT COUNT(*) FROM command_history"
 ```
 
 ## Security Considerations
@@ -365,6 +421,7 @@ mysql -h localhost -u nanohub -p nanohub -e "SELECT COUNT(*) FROM device_invento
 - Restrict Flask API to localhost
 - Enable audit logging
 - Regularly review audit logs
+- Command history provides 90-day audit trail
 
 ## MDM Profiles
 
@@ -442,26 +499,23 @@ DDM is Apple's newer device management approach that runs parallel to traditiona
 ```
 /opt/nanohub/ddm/
 ├── declarations/           # DDM declaration JSON files
-│   ├── com.sloto.ddm.activation.ios.json
-│   ├── com.sloto.ddm.activation.macos-bel.json
-│   ├── com.sloto.ddm.activation.macos-karlin.json
-│   ├── com.sloto.ddm.org-info.json
-│   ├── com.sloto.ddm.passcode.json
-│   ├── com.sloto.ddm.screensharing.json
-│   ├── com.sloto.ddm.softwareupdate.ios.json
-│   └── com.sloto.ddm.softwareupdate.macos.json
+│   ├── com.company.ddm.activation.ios.json
+│   ├── com.company.ddm.activation.macos.json
+│   ├── com.company.ddm.org-info.json
+│   ├── com.company.ddm.passcode.json
+│   ├── com.company.ddm.screensharing.json
+│   ├── com.company.ddm.softwareupdate.ios.json
+│   └── com.company.ddm.softwareupdate.macos.json
 ├── sets/                   # Set definition files (list of declarations)
-│   ├── sloto-ios-bel.txt
-│   ├── sloto-ios-karlin.txt
-│   ├── sloto-macos-bel-default.txt
-│   ├── sloto-macos-bel-tech.txt
-│   ├── sloto-macos-karlin-default.txt
-│   └── sloto-macos-karlin-tech.txt
+│   ├── ios-default.txt
+│   ├── macos-default.txt
+│   └── macos-tech.txt
 └── scripts/                # DDM management scripts
     ├── ddm-upload-declarations.sh
     ├── ddm-create-sets.sh
     ├── ddm-assign-device.sh
     ├── ddm-bulk-assign.sh
+    ├── ddm-force-sync.sh
     └── ddm-status.sh
 ```
 
@@ -479,6 +533,9 @@ All scripts use environment variables from `/opt/nanohub/environment.sh`:
 # Assign set to device
 /opt/nanohub/ddm/scripts/ddm-assign-device.sh <UDID> <set-name>
 
+# Force device to sync DDM
+/opt/nanohub/ddm/scripts/ddm-force-sync.sh <UDID>
+
 # View DDM status
 /opt/nanohub/ddm/scripts/ddm-status.sh all|declarations|sets|device <UDID>
 ```
@@ -488,8 +545,7 @@ All scripts use environment variables from `/opt/nanohub/environment.sh`:
 | Command | Description |
 |---------|-------------|
 | DDM Status | View declarations, sets, or device enrollment status |
-| Assign DDM Set | Assign a DDM set to a device |
-| Bulk DDM Assign | Assign DDM sets to multiple devices |
+| Manage DDM Sets | Assign/remove DDM sets to devices |
 | Upload Declarations | Upload all declarations to server |
 | Create Sets | Create/update all DDM sets |
 
@@ -554,6 +610,28 @@ log show --predicate 'eventMessage CONTAINS "declaration" OR eventMessage CONTAI
 ├── nanohub-web.service         # Web frontend service
 └── mdm-flask-api.service       # Legacy API service
 ```
+
+## Changelog
+
+### Version 2.0 (2026-01-09)
+- **VPP Panel**: New visual panel for VPP license management
+  - App icons from iTunes API
+  - Install/Remove apps directly from panel
+  - License statistics and filtering
+- **Command History**: MySQL-based command history
+  - 90-day retention with automatic cleanup
+  - Filtering by date, device, user, status
+  - Detailed parameter logging
+- **DDM Improvements**:
+  - Fixed timestamp display in DDM status
+  - Set assignment validation (check before remove)
+- **ProfileList**: Shows actual profile list from device response
+- **History Details**: Shows all command parameters and device hostname
+
+### Version 1.9 (2026-01-09)
+- DDM support with KMFDDM integration
+- Bulk DDM operations
+- Improved parallel execution
 
 ## Contributing
 

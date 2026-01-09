@@ -21,7 +21,7 @@ usage() {
     echo ""
     echo "Arguments:"
     echo "  device_udid  - Device UDID to assign"
-    echo "  set_name     - DDM set name (e.g., sloto-macos-karlin-default)"
+    echo "  set_name     - DDM set name (e.g., macos-default)"
     echo ""
     echo "Available sets:"
     for set_file in "$(dirname "$SCRIPT_DIR")/sets"/*.txt; do

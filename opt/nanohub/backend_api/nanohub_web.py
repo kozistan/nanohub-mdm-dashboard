@@ -79,10 +79,10 @@ SESSION_PANEL_HTML = '''
 
 def inject_session_panel(html_content, user_info):
     """Vlozi session panel do HTML obsahu"""
-    # Admin link only for admin, bel-admin and operator roles
+    # Admin link only for admin, restricted-admin and operator roles
     admin_link = ''
     user_role = user_info.get('role', 'report')
-    if user_role in ['admin', 'bel-admin', 'operator']:
+    if user_role in ['admin', 'restricted-admin', 'operator']:
         admin_link = '<a href="/admin" class="btn" style="margin:0 10px 0 0;padding:6px 16px;">Admin Panel</a>'
 
     session_panel = SESSION_PANEL_HTML.format(
@@ -195,6 +195,6 @@ a { color: #3572e3; }
 
 if __name__ == '__main__':
     print("NanoHUB Web starting with LDAP authentication...")
-    print("Allowed groups: it, mdm-admin, mdm-bel-admin, mdm-operator, mdm-report")
+    print("Allowed groups: it, mdm-admin, mdm-restricted-admin, mdm-operator, mdm-report")
     print(f"Loading dashboard from: {ORIGINAL_INDEX_PATH}")
     app.run(host='127.0.0.1', port=9007, debug=False)

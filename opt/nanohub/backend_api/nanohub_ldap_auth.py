@@ -39,21 +39,21 @@ LDAP_CONFIG = {
 GROUP_ROLE_MAPPING = {
     'it': 'admin',
     'mdm-admin': 'admin',
-    'mdm-bel-admin': 'bel-admin',
+    'mdm-restricted-admin': 'restricted-admin',
     'mdm-operator': 'operator',
     'mdm-report': 'report',
 }
 
 ROLE_PERMISSIONS = {
     'admin': ['admin', 'operator', 'report', 'settings', 'users'],
-    'bel-admin': ['admin', 'operator', 'report', 'settings', 'users'],  # Same as admin but filtered
+    'restricted-admin': ['admin', 'operator', 'report', 'settings', 'users'],  # Same as admin but filtered
     'operator': ['operator', 'report', 'devices', 'profiles', 'apps'],
     'report': ['report', 'view'],
 }
 
 # Manifest filters for restricted roles
 ROLE_MANIFEST_FILTER = {
-    'bel-admin': 'bel-%',  # SQL LIKE pattern - only bel-* manifests
+    'restricted-admin': 'site-%',  # SQL LIKE pattern - only site-* manifests
 }
 
 # =============================================================================
@@ -171,9 +171,9 @@ def ldap_authenticate(username, password):
             if group_role == 'admin':
                 role = 'admin'
                 break
-            elif group_role == 'bel-admin' and role not in ['admin']:
-                role = 'bel-admin'
-            elif group_role == 'operator' and role not in ['admin', 'bel-admin']:
+            elif group_role == 'restricted-admin' and role not in ['admin']:
+                role = 'restricted-admin'
+            elif group_role == 'operator' and role not in ['admin', 'restricted-admin']:
                 role = 'operator'
 
         # Check if role has manifest filter
@@ -187,7 +187,7 @@ def ldap_authenticate(username, password):
             'role': role,
             'groups': allowed_groups,
             'permissions': ROLE_PERMISSIONS.get(role, []),
-            'manifest_filter': manifest_filter,  # e.g. 'bel-%' for bel-admin
+            'manifest_filter': manifest_filter,  # e.g. 'site-%' for restricted-admin
         }
 
         logger.info(f"User {username} authenticated successfully with role: {role}")
@@ -387,7 +387,7 @@ LOGIN_TEMPLATE = '''
             </div>
             <button type="submit" class="btn btn-login red">Sign In</button>
         </form>
-        <p class="login-footer">Sign in with your SLOTO.SPACE domain account</p>
+        <p class="login-footer">Sign in with your EXAMPLE.COM domain account</p>
     </div>
 </body>
 </html>
@@ -458,8 +458,8 @@ def register_auth_routes(app):
     def inject_user():
         return {
             'current_user': session.get('user'),
-            'is_admin': session.get('user', {}).get('role') in ['admin', 'bel-admin'],
-            'is_operator': session.get('user', {}).get('role') in ['admin', 'bel-admin', 'operator'],
+            'is_admin': session.get('user', {}).get('role') in ['admin', 'restricted-admin'],
+            'is_operator': session.get('user', {}).get('role') in ['admin', 'restricted-admin', 'operator'],
         }
 
 

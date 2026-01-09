@@ -160,7 +160,7 @@ def get_munki_profile(manifest_type):
     Get Munki profile filename for given manifest type.
 
     Args:
-        manifest_type: One of 'default', 'tech', 'bel-default', 'bel-tech'
+        manifest_type: One of 'default', 'tech', 'site-b-default', 'site-b-tech'
 
     Returns:
         Profile filename or None
@@ -170,8 +170,8 @@ def get_munki_profile(manifest_type):
     mapping = {
         'default': config.get('MUNKI_PROFILE_DEFAULT'),
         'tech': config.get('MUNKI_PROFILE_TECH'),
-        'bel-default': config.get('MUNKI_PROFILE_BEL_DEFAULT'),
-        'bel-tech': config.get('MUNKI_PROFILE_BEL_TECH'),
+        'site-b-default': config.get('MUNKI_PROFILE_SITE_B_DEFAULT'),
+        'site-b-tech': config.get('MUNKI_PROFILE_SITE_B_TECH'),
     }
 
     return mapping.get(manifest_type)
@@ -234,5 +234,5 @@ if __name__ == '__main__':
         print(f"  {opt['value']}: {opt['label']}")
 
     print("\n=== Munki Profiles ===")
-    for mtype in ['default', 'tech', 'bel-default', 'bel-tech']:
+    for mtype in ['default', 'tech', 'site-b-default', 'site-b-tech']:
         print(f"  {mtype}: {get_munki_profile(mtype)}")

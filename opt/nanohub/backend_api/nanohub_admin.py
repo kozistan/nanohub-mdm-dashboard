@@ -43,7 +43,7 @@ executor = ThreadPoolExecutor(max_workers=10)
 DB_CONFIG = {
     'host': '127.0.0.1',
     'user': 'nanohub',
-    'password': 'YOUR_DB_PASSWORD',
+    'password': 'your_db_password',
     'database': 'nanohub'
 }
 
@@ -78,11 +78,11 @@ def login_required_admin(f):
 
 
 # =============================================================================
-# AUDIT LOGGING
+# AUDIT LOGGING & COMMAND HISTORY
 # =============================================================================
 
-def get_hostname_for_uuid(uuid):
-    """Get hostname for a device UUID from database"""
+def get_device_info_for_uuid(uuid_val):
+    """Get device info (hostname, serial) for a device UUID from database"""
     try:
         import mysql.connector
         conn = mysql.connector.connect(
@@ -91,29 +91,100 @@ def get_hostname_for_uuid(uuid):
             password=DB_CONFIG['password'],
             database=DB_CONFIG['database']
         )
-        cursor = conn.cursor()
-        cursor.execute("SELECT hostname FROM device_inventory WHERE uuid = %s", (uuid,))
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT hostname, serial FROM device_inventory WHERE uuid = %s",
+            (uuid_val,)
+        )
         result = cursor.fetchone()
         cursor.close()
         conn.close()
-        return result[0] if result else None
+        return result if result else {'hostname': None, 'serial': None}
     except Exception as e:
-        logger.error(f"Failed to get hostname for UUID {uuid}: {e}")
-        return None
+        logger.error(f"Failed to get device info for UUID {uuid_val}: {e}")
+        return {'hostname': None, 'serial': None}
 
 
-def audit_log(user, action, command, params, result, success):
-    """Log admin action to audit file"""
+def get_hostname_for_uuid(uuid_val):
+    """Get hostname for a device UUID from database (backwards compatibility)"""
+    info = get_device_info_for_uuid(uuid_val)
+    return info.get('hostname')
+
+
+def audit_log(user, action, command, params, result, success, execution_time_ms=None):
+    """Log admin action to MySQL command_history and file"""
+    import mysql.connector
+
     try:
+        # Extract device info
+        device_udid = None
+        device_serial = None
+        device_hostname = None
+
+        if params:
+            # Handle single device UDID
+            if 'udid' in params and params['udid']:
+                device_udid = params['udid']
+                device_info = get_device_info_for_uuid(device_udid)
+                device_serial = device_info.get('serial')
+                device_hostname = device_info.get('hostname')
+            # Handle multiple devices (take first for primary record)
+            elif 'devices' in params and params['devices']:
+                devices = params['devices']
+                if isinstance(devices, list) and len(devices) > 0:
+                    device_udid = devices[0]
+                    device_info = get_device_info_for_uuid(device_udid)
+                    device_serial = device_info.get('serial')
+                    device_hostname = device_info.get('hostname')
+
+        # Get command name from registry
+        from command_registry import get_command
+        cmd_info = get_command(command)
+        command_name = cmd_info.get('name', command) if cmd_info else command
+
+        # Write to MySQL
+        try:
+            conn = mysql.connector.connect(
+                host=DB_CONFIG['host'],
+                user=DB_CONFIG['user'],
+                password=DB_CONFIG['password'],
+                database=DB_CONFIG['database']
+            )
+            cursor = conn.cursor()
+
+            # Truncate result for storage
+            result_summary = result[:2000] if result else None
+
+            cursor.execute("""
+                INSERT INTO command_history
+                (user, command_id, command_name, device_udid, device_serial,
+                 device_hostname, params, result_summary, success, execution_time_ms)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                user,
+                command,
+                command_name,
+                device_udid,
+                device_serial,
+                device_hostname,
+                json.dumps(params) if params else None,
+                result_summary,
+                1 if success else 0,
+                execution_time_ms
+            ))
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as db_err:
+            logger.error(f"Failed to write to command_history: {db_err}")
+
+        # Also write to file (backup)
         os.makedirs(os.path.dirname(AUDIT_LOG_PATH), exist_ok=True)
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # Enrich params with hostname if udid is present
         enriched_params = dict(params) if params else {}
-        if 'udid' in enriched_params and enriched_params['udid']:
-            hostname = get_hostname_for_uuid(enriched_params['udid'])
-            if hostname:
-                enriched_params['device'] = f"{hostname} ({enriched_params['udid']})"
+        if device_hostname and device_udid:
+            enriched_params['device'] = f"{device_hostname} ({device_udid})"
 
         log_entry = {
             'timestamp': timestamp,
@@ -126,8 +197,189 @@ def audit_log(user, action, command, params, result, success):
         }
         with open(AUDIT_LOG_PATH, 'a') as f:
             f.write(json.dumps(log_entry) + '\n')
+
     except Exception as e:
         logger.error(f"Failed to write audit log: {e}")
+
+
+def cleanup_old_history(days=90):
+    """Delete command history older than specified days"""
+    import mysql.connector
+    try:
+        conn = mysql.connector.connect(
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database']
+        )
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM command_history WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)",
+            (days,)
+        )
+        deleted_count = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"Cleaned up {deleted_count} old history records (older than {days} days)")
+        return deleted_count
+    except Exception as e:
+        logger.error(f"Failed to cleanup old history: {e}")
+        return 0
+
+
+# =============================================================================
+# VPP/ABM FUNCTIONS
+# =============================================================================
+
+def get_vpp_token():
+    """Get VPP token from environment.sh"""
+    try:
+        with open('/opt/nanohub/environment.sh', 'r') as f:
+            for line in f:
+                if line.startswith('export VPP_TOKEN='):
+                    return line.split('=', 1)[1].strip().strip('"\'')
+    except Exception as e:
+        logger.error(f"Failed to read VPP token: {e}")
+    return None
+
+
+def get_vpp_token_info():
+    """Get VPP token metadata (expiration, org name)"""
+    import base64
+    token = get_vpp_token()
+    if not token:
+        return None
+    try:
+        decoded = base64.b64decode(token).decode('utf-8')
+        return json.loads(decoded)
+    except Exception as e:
+        logger.error(f"Failed to decode VPP token: {e}")
+        return None
+
+
+def fetch_vpp_assets():
+    """Fetch VPP assets (licenses) from Apple ABM API"""
+    import urllib.request
+    import ssl
+
+    token = get_vpp_token()
+    if not token:
+        return {'error': 'VPP token not found'}
+
+    try:
+        # Create SSL context that doesn't verify (for internal use)
+        ctx = ssl.create_default_context()
+
+        req = urllib.request.Request(
+            "https://vpp.itunes.apple.com/mdm/v2/assets?pageSize=500",
+            headers={
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json'
+            }
+        )
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as e:
+        logger.error(f"Failed to fetch VPP assets: {e}")
+        return {'error': str(e)}
+
+
+def get_app_name_from_itunes(adam_id):
+    """Get app name from iTunes API by adamId"""
+    import urllib.request
+    try:
+        url = f"https://itunes.apple.com/lookup?id={adam_id}&country=us"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            if data.get('results'):
+                return {
+                    'name': data['results'][0].get('trackName', 'Unknown'),
+                    'bundleId': data['results'][0].get('bundleId', ''),
+                    'version': data['results'][0].get('version', ''),
+                    'icon': data['results'][0].get('artworkUrl60', '')
+                }
+    except Exception as e:
+        logger.error(f"Failed to fetch app info for {adam_id}: {e}")
+    return None
+
+
+def get_vpp_apps_with_names():
+    """Get VPP assets enriched with app names from local JSON files and iTunes API"""
+    import urllib.request
+
+    assets_response = fetch_vpp_assets()
+
+    if 'error' in assets_response:
+        return assets_response
+
+    assets = assets_response.get('assets', [])
+
+    # Load local app definitions for name mapping
+    app_names = {}
+    for json_path in ['/home/microm/nanohub/data/apps_ios.json',
+                      '/home/microm/nanohub/data/apps_macos.json']:
+        try:
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+                for app in data.get('apps', []):
+                    app_names[app.get('adamId')] = {
+                        'name': app.get('name', ''),
+                        'bundleId': app.get('bundleId', '')
+                    }
+        except Exception:
+            pass
+
+    # Collect ALL adamIds for batch lookup (to get icons)
+    all_adam_ids = [str(asset.get('adamId', '')) for asset in assets if asset.get('adamId')]
+
+    # Batch lookup from iTunes API (up to 200 at once) - for names and icons
+    if all_adam_ids:
+        try:
+            ids_str = ','.join(all_adam_ids[:200])
+            url = f"https://itunes.apple.com/lookup?id={ids_str}&country=us"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+                for result in data.get('results', []):
+                    track_id = str(result.get('trackId', ''))
+                    # Update or add entry with icon
+                    existing = app_names.get(track_id, {})
+                    app_names[track_id] = {
+                        'name': existing.get('name') or result.get('trackName', ''),
+                        'bundleId': existing.get('bundleId') or result.get('bundleId', ''),
+                        'icon': result.get('artworkUrl60', '')
+                    }
+        except Exception as e:
+            logger.error(f"Failed to batch lookup iTunes: {e}")
+
+    # Enrich assets with names
+    enriched = []
+    for asset in assets:
+        adam_id = str(asset.get('adamId', ''))
+        app_info = app_names.get(adam_id, {})
+
+        enriched.append({
+            'adamId': adam_id,
+            'name': app_info.get('name') or f'App {adam_id}',
+            'bundleId': app_info.get('bundleId', ''),
+            'icon': app_info.get('icon', ''),
+            'totalCount': asset.get('totalCount', 0),
+            'assignedCount': asset.get('assignedCount', 0),
+            'availableCount': asset.get('availableCount', 0),
+            'platforms': asset.get('supportedPlatforms', []),
+            'deviceAssignable': asset.get('deviceAssignable', False)
+        })
+
+    # Sort by name
+    enriched.sort(key=lambda x: x.get('name', '').lower())
+
+    return {
+        'apps': enriched,
+        'tokenExpiration': assets_response.get('tokenExpirationDate'),
+        'totalApps': len(enriched)
+    }
 
 
 # =============================================================================
@@ -253,7 +505,7 @@ def execute_command(cmd_id, params, user_info):
     if not check_role_permission(user_role, cmd.get('min_role', 'admin')):
         return {'success': False, 'error': 'Insufficient permissions'}
 
-    # Validate device access for users with manifest_filter (e.g., bel-admin)
+    # Validate device access for users with manifest_filter (e.g., restricted-admin)
     udid = params.get('udid') or params.get('uuid')
     if udid and user_info.get('manifest_filter'):
         if not validate_device_access(udid, user_info):
@@ -371,6 +623,70 @@ def execute_command(cmd_id, params, user_info):
     # Special handling for bulk_remote_desktop - enable/disable RD on all macOS devices
     elif cmd_id == 'bulk_remote_desktop':
         return execute_bulk_remote_desktop(params, user_info)
+
+    # ==========================================================================
+    # CONSOLIDATED COMMAND HANDLERS
+    # ==========================================================================
+
+    # Manage Profiles (install/remove/list on one or more devices)
+    elif cmd_id == 'manage_profiles':
+        return execute_manage_profiles(params, user_info)
+
+    # Manage DDM Sets (assign/remove on one or more devices)
+    elif cmd_id == 'manage_ddm_sets':
+        return execute_manage_ddm_sets(params, user_info)
+
+    # Install Application (on one or more devices)
+    elif cmd_id == 'install_application':
+        return execute_install_application(params, user_info)
+
+    # Device Action (lock/unlock/restart/erase/clear_passcode)
+    elif cmd_id == 'device_action':
+        return execute_device_action(params, user_info)
+
+    # Schedule OS Update (on one or more devices)
+    elif cmd_id == 'schedule_os_update':
+        return execute_schedule_os_update(params, user_info)
+
+    # Manage Remote Desktop (enable/disable on one or more devices)
+    elif cmd_id == 'manage_remote_desktop':
+        return execute_manage_remote_desktop(params, user_info)
+
+    # Manage VPP App (install/remove for iOS/macOS)
+    elif cmd_id == 'manage_vpp_app':
+        return execute_manage_vpp_app(params, user_info)
+
+    # Manage Command Queue (show/clear)
+    elif cmd_id == 'manage_command_queue':
+        return execute_manage_command_queue(params, user_info)
+
+    # MDM Analyzer - needs --json flag for non-interactive mode
+    elif cmd_id == 'mdm_analyzer':
+        udid = sanitize_param(params.get('udid', ''))
+        if not udid:
+            return {'success': False, 'error': 'Missing required parameter: udid'}
+        script_path = os.path.join(COMMANDS_DIR, 'mdm_analyzer')
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+            result = subprocess.run(
+                [script_path, udid, '--json'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                cwd=COMMANDS_DIR,
+                env=env
+            )
+            return {
+                'success': result.returncode == 0,
+                'output': result.stdout + result.stderr,
+                'return_code': result.returncode
+            }
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'error': 'Command timed out'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
 
     # Default parameter handling
     else:
@@ -512,7 +828,7 @@ def get_devices_list(manifest_filter=None):
     """Get list of devices from database, optionally filtered by manifest"""
     where_clause = ""
     if manifest_filter:
-        # manifest_filter is SQL LIKE pattern e.g. 'bel-%'
+        # manifest_filter is SQL LIKE pattern e.g. 'site-%'
         where_clause = f"WHERE di.manifest LIKE '{manifest_filter}'"
 
     sql = f"""
@@ -693,7 +1009,7 @@ def validate_device_access(uuid, user_info):
         return False  # Device not found
 
     # Convert SQL LIKE pattern to simple check
-    # 'bel-%' means manifest must start with 'bel-'
+    # 'site-%' means manifest must start with 'site-'
     if manifest_filter.endswith('%'):
         prefix = manifest_filter[:-1]  # Remove '%'
         return device_manifest.startswith(prefix)
@@ -721,7 +1037,7 @@ def execute_device_add(params, user_info):
     if not uuid_val or not serial or not os_type or not hostname:
         return {'success': False, 'error': 'Missing required fields: uuid, serial, os, hostname'}
 
-    # Validate manifest for users with manifest_filter (e.g., bel-admin can only add bel-* devices)
+    # Validate manifest for users with manifest_filter (e.g., restricted-admin can only add site-* devices)
     manifest_filter = user_info.get('manifest_filter')
     if manifest_filter:
         if manifest_filter.endswith('%'):
@@ -1008,9 +1324,9 @@ def execute_bulk_new_device_installation(params, user_info):
         output_lines.append("\n[PHASE 1] Installing base profiles...")
 
         # Common profiles for both branches
-        install_profile('sloto.macos.appleRoot.profile.signed.mobileconfig')
-        install_profile('sloto.macos.Root.profile.signed.mobileconfig')
-        install_profile('sloto.macos.EnergySaver.profile.signed.mobileconfig')
+        install_profile('company.macos.appleRoot.profile.signed.mobileconfig')
+        install_profile('company.macos.Root.profile.signed.mobileconfig')
+        install_profile('company.macos.EnergySaver.profile.signed.mobileconfig')
 
         output_lines.append("\n[PHASE 2] Installing Munki profile...")
 
@@ -1020,44 +1336,44 @@ def execute_bulk_new_device_installation(params, user_info):
 
         if munki_profile:
             install_profile(munki_profile)
-        elif branch == 'karlin':
+        elif branch == 'site-a':
             # Fallback for old format: 'default'/'tech' with branch determining profile
             if munki_type == 'tech':
-                install_profile(get_munki_profile('tech') or 'sloto.macos.Munki-Tech.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('tech') or 'company.macos.Munki-Tech.profile.signed.mobileconfig')
             else:
-                install_profile(get_munki_profile('default') or 'sloto.macos.Munki-Default.profile.signed.mobileconfig')
-        else:  # belehradska with default/tech (fallback)
+                install_profile(get_munki_profile('default') or 'company.macos.Munki-Default.profile.signed.mobileconfig')
+        else:  # site-b with default/tech (fallback)
             if munki_type == 'tech':
-                install_profile(get_munki_profile('bel-tech') or 'sloto.macos.Munki-Bel-Tech.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('site-b-tech') or 'company.macos.Munki-Site-B-Tech.profile.signed.mobileconfig')
             else:
-                install_profile(get_munki_profile('bel-default') or 'sloto.macos.Munki-Bel-Default.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('site-b-default') or 'company.macos.Munki-Site-B-Default.profile.signed.mobileconfig')
 
-        # Karlin-specific SSO profile
-        if branch == 'karlin':
-            karlin_sso = get_value('KARLIN_SSO_PROFILE')
-            if karlin_sso:
-                install_profile(karlin_sso)
+        # Site-A specific SSO profile
+        if branch == 'site-a':
+            site_a_sso = get_value('SITE_A_SSO_PROFILE')
+            if site_a_sso:
+                install_profile(site_a_sso)
 
         output_lines.append("\n[PHASE 3] Installing security profiles...")
 
         # Common profiles continued
-        install_profile('sloto.macos.Restrictions.profile.signed.mobileconfig')
-        install_profile('sloto.macos.Account-Disabled.profile.signed.mobileconfig')
-        install_profile('sloto.macos.Firewall.profile.signed.mobileconfig')
+        install_profile('company.macos.Restrictions.profile.signed.mobileconfig')
+        install_profile('company.macos.Account-Disabled.profile.signed.mobileconfig')
+        install_profile('company.macos.Firewall.profile.signed.mobileconfig')
 
         output_lines.append("\n[PHASE 4] Installing applications...")
 
         # Applications
-        install_application('https://repo.sloto.space/munki/sloto_mdmagent.plist')
-        install_application('https://repo.sloto.space/munki/sloto_munki7.plist')
+        install_application('https://repo.example.com/munki/company_mdmagent.plist')
+        install_application('https://repo.example.com/munki/company_munki7.plist')
 
-        # Branch-specific applications for Karlin
-        if branch == 'karlin':
-            install_application('https://repo.sloto.space/munki/sloto_drivemap.plist')
-            install_application('https://repo.sloto.space/munki/sloto_removeadmin_manifest.plist')
+        # Branch-specific applications for Site-A
+        if branch == 'site-a':
+            install_application('https://repo.example.com/munki/company_drivemap.plist')
+            install_application('https://repo.example.com/munki/company_removeadmin_manifest.plist')
 
-        # Directory Services (Karlin only, if enabled and hostname provided)
-        if branch == 'karlin' and install_directory_services == 'yes' and hostname:
+        # Directory Services (Site-A only, if enabled and hostname provided)
+        if branch == 'site-a' and install_directory_services == 'yes' and hostname:
             output_lines.append("\n[PHASE 5] Setting up Directory Services...")
 
             # Set hostname first
@@ -1070,16 +1386,16 @@ def execute_bulk_new_device_installation(params, user_info):
             time.sleep(WAIT_INTERVAL)
 
             # Install Directory Services profile
-            install_profile('sloto.macos.DirectoryServices.profile.signed.mobileconfig')
+            install_profile('company.macos.DirectoryServices.profile.signed.mobileconfig')
 
         # FileVault profile
         if install_filevault == 'yes':
             output_lines.append("\n[PHASE 6] Installing FileVault profile...")
             output_lines.append("NOTE: Client (not admin) should be logged in for FileVault!")
-            install_profile('sloto.macos.Filevault.profile.signed.mobileconfig')
+            install_profile('company.macos.Filevault.profile.signed.mobileconfig')
 
-        # WireGuard profile (Karlin only)
-        if branch == 'karlin' and install_wireguard == 'yes' and wireguard_username:
+        # WireGuard profile (Site-A only)
+        if branch == 'site-a' and install_wireguard == 'yes' and wireguard_username:
             output_lines.append("\n[PHASE 7] Installing WireGuard profile...")
 
             # Search for WireGuard profile in ALL subdirectories under wireguard_configs
@@ -1107,13 +1423,13 @@ def execute_bulk_new_device_installation(params, user_info):
     elif platform == 'ios':
         output_lines.append("\n[PHASE 1] Installing iOS profiles...")
 
-        install_profile('sloto.ios.appleRoot.profile.signed.mobileconfig')
-        install_profile('sloto.ios.Account-Disabled.profile.signed.mobileconfig')
-        install_profile('sloto.ios.Restrictions.profile.signed.mobileconfig')
-        install_profile('sloto.ios.whitelist.signed.mobileconfig')
+        install_profile('company.ios.appleRoot.profile.signed.mobileconfig')
+        install_profile('company.ios.Account-Disabled.profile.signed.mobileconfig')
+        install_profile('company.ios.Restrictions.profile.signed.mobileconfig')
+        install_profile('company.ios.whitelist.signed.mobileconfig')
 
-        # WireGuard profile for iOS (Karlin only)
-        if branch == 'karlin' and install_wireguard == 'yes' and wireguard_username:
+        # WireGuard profile for iOS (Site-A only)
+        if branch == 'site-a' and install_wireguard == 'yes' and wireguard_username:
             output_lines.append("\n[PHASE 2] Installing WireGuard profile...")
 
             # Search for WireGuard profile in ALL subdirectories under wireguard_configs
@@ -1530,6 +1846,7 @@ ADMIN_DASHBOARD_TEMPLATE = '''
                 <a href="/admin" class="btn active">Commands</a>
                 <a href="/admin/history" class="btn">History</a>
                 <a href="/admin/profiles" class="btn">Profiles</a>
+                <a href="/admin/vpp" class="btn">VPP</a>
             </div>
 
             <div class="category-grid">
@@ -2279,6 +2596,64 @@ ADMIN_HISTORY_TEMPLATE = '''
         .nav-tabs a.active { background: #e89898; color: white; }
         .status-success { color: #27ae60; font-weight: bold; }
         .status-failed { color: #e92128; font-weight: bold; }
+        .filter-form {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 15px;
+            padding: 15px;
+            background: #f7f8fa;
+            border-radius: 5px;
+        }
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .filter-group label {
+            font-size: 0.85em;
+            font-weight: 500;
+            color: #4b5563;
+        }
+        .filter-group input, .filter-group select {
+            padding: 6px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        .filter-buttons {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+        }
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 5px;
+            margin-top: 15px;
+        }
+        .pagination a, .pagination span {
+            padding: 6px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            text-decoration: none;
+            color: #21243b;
+        }
+        .pagination a:hover { background: #f3f4f6; }
+        .pagination span.current { background: #e89898; color: white; border-color: #e89898; }
+        .pagination span.disabled { color: #9ca3af; }
+        .result-info {
+            font-size: 0.9em;
+            color: #4b5563;
+            margin-bottom: 10px;
+        }
+        .device-cell {
+            font-size: 0.85em;
+        }
+        .device-hostname { font-weight: 500; }
+        .device-udid { color: #6b7280; font-size: 0.85em; }
+        .details-cell { font-size: 0.85em; color: #374151; }
+        .result-summary { margin-top: 4px; color: #6b7280; font-style: italic; }
     </style>
 </head>
 <body>
@@ -2290,7 +2665,7 @@ ADMIN_HISTORY_TEMPLATE = '''
 
         <div class="panel">
             <div class="admin-header">
-                <div class="panel-title" style="margin:0;">Recent Commands</div>
+                <div class="panel-title" style="margin:0;">Command History (90 days)</div>
                 <a href="/admin" class="btn">Back to Commands</a>
             </div>
 
@@ -2298,6 +2673,48 @@ ADMIN_HISTORY_TEMPLATE = '''
                 <a href="/admin" class="btn">Commands</a>
                 <a href="/admin/history" class="btn active">History</a>
                 <a href="/admin/profiles" class="btn">Profiles</a>
+                <a href="/admin/vpp" class="btn">VPP</a>
+            </div>
+
+            <form method="GET" class="filter-form">
+                <div class="filter-group">
+                    <label>Date From</label>
+                    <input type="date" name="date_from" value="{{ date_from or '' }}">
+                </div>
+                <div class="filter-group">
+                    <label>Date To</label>
+                    <input type="date" name="date_to" value="{{ date_to or '' }}">
+                </div>
+                <div class="filter-group">
+                    <label>Device (UDID/Serial/Hostname)</label>
+                    <input type="text" name="device" value="{{ device_filter or '' }}" placeholder="Search device...">
+                </div>
+                <div class="filter-group">
+                    <label>User</label>
+                    <select name="user_filter">
+                        <option value="">All users</option>
+                        {% for u in users %}
+                        <option value="{{ u }}" {% if u == user_filter %}selected{% endif %}>{{ u }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Status</label>
+                    <select name="status">
+                        <option value="">All</option>
+                        <option value="1" {% if status_filter == '1' %}selected{% endif %}>Success</option>
+                        <option value="0" {% if status_filter == '0' %}selected{% endif %}>Failed</option>
+                    </select>
+                </div>
+                <div class="filter-buttons">
+                    <button type="submit" class="btn">Filter</button>
+                    <a href="/admin/history" class="btn" style="background:#6b7280;">Clear</a>
+                </div>
+            </form>
+
+            <div class="result-info">
+                Showing {{ history|length }} of {{ total_count }} records
+                {% if total_count > 0 %}(Page {{ page }} of {{ total_pages }}){% endif %}
             </div>
 
             <table>
@@ -2306,18 +2723,34 @@ ADMIN_HISTORY_TEMPLATE = '''
                         <th>Timestamp</th>
                         <th>User</th>
                         <th>Command</th>
-                        <th>Parameters</th>
+                        <th>Details</th>
+                        <th>Device</th>
                         <th>Status</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for entry in history %}
                     <tr>
-                        <td>{{ entry.timestamp }}</td>
+                        <td>{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') if entry.timestamp else '' }}</td>
                         <td>{{ entry.user }}</td>
-                        <td>{{ entry.command }}</td>
-                        <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;font-size:0.85em;">
-                            {{ entry.params | tojson }}
+                        <td>{{ entry.command_name }}</td>
+                        <td class="details-cell">
+                            {% if entry.params %}
+                                {% for key, val in entry.params.items() %}
+                                    {% if val and key not in ['devices', 'udid'] %}
+                                        <strong>{{ key }}:</strong> {{ val }}<br>
+                                    {% endif %}
+                                {% endfor %}
+                            {% endif %}
+                            {% if entry.result_summary %}<div class="result-summary">{{ entry.result_summary }}</div>{% endif %}
+                        </td>
+                        <td class="device-cell">
+                            {% if entry.device_hostname %}
+                            <div class="device-hostname">{{ entry.device_hostname }}</div>
+                            {% endif %}
+                            {% if entry.device_udid %}
+                            <div class="device-udid">{{ entry.device_udid }}</div>
+                            {% endif %}
                         </td>
                         <td class="{% if entry.success %}status-success{% else %}status-failed{% endif %}">
                             {% if entry.success %}Success{% else %}Failed{% endif %}
@@ -2326,11 +2759,37 @@ ADMIN_HISTORY_TEMPLATE = '''
                     {% endfor %}
                     {% if not history %}
                     <tr>
-                        <td colspan="5" style="text-align:center;color:#4b5563;">No execution history found</td>
+                        <td colspan="6" style="text-align:center;color:#4b5563;">No execution history found</td>
                     </tr>
                     {% endif %}
                 </tbody>
             </table>
+
+            {% if total_pages > 1 %}
+            <div class="pagination">
+                {% if page > 1 %}
+                <a href="?page={{ page - 1 }}&date_from={{ date_from or '' }}&date_to={{ date_to or '' }}&device={{ device_filter or '' }}&user_filter={{ user_filter or '' }}&status={{ status_filter or '' }}">&laquo; Prev</a>
+                {% else %}
+                <span class="disabled">&laquo; Prev</span>
+                {% endif %}
+
+                {% for p in range(1, total_pages + 1) %}
+                    {% if p == page %}
+                    <span class="current">{{ p }}</span>
+                    {% elif p <= 3 or p > total_pages - 2 or (p >= page - 1 and p <= page + 1) %}
+                    <a href="?page={{ p }}&date_from={{ date_from or '' }}&date_to={{ date_to or '' }}&device={{ device_filter or '' }}&user_filter={{ user_filter or '' }}&status={{ status_filter or '' }}">{{ p }}</a>
+                    {% elif p == 4 or p == total_pages - 2 %}
+                    <span>...</span>
+                    {% endif %}
+                {% endfor %}
+
+                {% if page < total_pages %}
+                <a href="?page={{ page + 1 }}&date_from={{ date_from or '' }}&date_to={{ date_to or '' }}&device={{ device_filter or '' }}&user_filter={{ user_filter or '' }}&status={{ status_filter or '' }}">Next &raquo;</a>
+                {% else %}
+                <span class="disabled">Next &raquo;</span>
+                {% endif %}
+            </div>
+            {% endif %}
         </div>
     </div>
 </body>
@@ -2406,6 +2865,7 @@ ADMIN_PROFILES_TEMPLATE = '''
                 <a href="/admin" class="btn">Commands</a>
                 <a href="/admin/history" class="btn">History</a>
                 <a href="/admin/profiles" class="btn active">Profiles</a>
+                <a href="/admin/vpp" class="btn">VPP</a>
             </div>
 
             <div class="profile-section">
@@ -2453,6 +2913,1233 @@ ADMIN_PROFILES_TEMPLATE = '''
 </body>
 </html>
 '''
+
+ADMIN_VPP_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VPP Licenses - NanoHUB Admin</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+    <link rel="shortcut icon" href="/static/favicon.ico">
+    <style>
+        .admin-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .nav-tabs { margin-bottom: 15px; }
+        .nav-tabs a { margin-right: 8px; }
+        .nav-tabs a.active { background: #e89898; color: white; }
+        .token-info {
+            background: #f0fdf4;
+            border: 1px solid #86efac;
+            border-radius: 5px;
+            padding: 12px 15px;
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .token-info.warning {
+            background: #fef3c7;
+            border-color: #fcd34d;
+        }
+        .token-info.error {
+            background: #fef2f2;
+            border-color: #fca5a5;
+        }
+        .token-org { font-weight: 600; color: #166534; }
+        .token-expiry { color: #4b5563; font-size: 0.9em; }
+        .filter-bar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .filter-bar select, .filter-bar input {
+            padding: 6px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+        }
+        .stats-bar {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+            padding: 10px 15px;
+            background: #f7f8fa;
+            border-radius: 5px;
+        }
+        .stat-item { text-align: center; }
+        .stat-value { font-size: 1.5em; font-weight: 600; color: #21243b; }
+        .stat-label { font-size: 0.85em; color: #6b7280; }
+        .license-bar {
+            display: flex;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            min-width: 100px;
+        }
+        .license-used {
+            background: #3b82f6;
+        }
+        .license-info {
+            font-size: 0.85em;
+            color: #6b7280;
+        }
+        .platform-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.75em;
+            font-weight: 500;
+            margin-right: 3px;
+        }
+        .platform-ios { background: #dbeafe; color: #1d4ed8; }
+        .platform-macos { background: #f3e8ff; color: #7c3aed; }
+        .platform-watchos { background: #fce7f3; color: #be185d; }
+        .platform-tvos { background: #ccfbf1; color: #0d9488; }
+        .platform-visionos { background: #fef3c7; color: #b45309; }
+        .app-name { font-weight: 500; }
+        .app-bundle { font-size: 0.85em; color: #6b7280; }
+        .low-licenses { color: #dc2626; font-weight: 500; }
+        table { width: 100%; }
+        th { text-align: left; padding: 10px 8px; }
+        td { padding: 10px 8px; vertical-align: middle; }
+    </style>
+</head>
+<body>
+    <div id="wrap">
+        <div style="display: flex; justify-content: center; align-items: center;">
+            <img id="logo" src="/static/logo.svg" alt="Logo"/>
+        </div>
+        <h1>VPP Licenses</h1>
+
+        <div class="panel">
+            <div class="admin-header">
+                <div class="panel-title" style="margin:0;">Apple Business Manager - VPP Apps</div>
+                <a href="/admin" class="btn">Back to Commands</a>
+            </div>
+
+            <div class="nav-tabs">
+                <a href="/admin" class="btn">Commands</a>
+                <a href="/admin/history" class="btn">History</a>
+                <a href="/admin/profiles" class="btn">Profiles</a>
+                <a href="/admin/vpp" class="btn active">VPP</a>
+            </div>
+
+            {% if error %}
+            <div class="token-info error">
+                <span>Error: {{ error }}</span>
+            </div>
+            {% else %}
+            <div class="token-info {% if token_warning %}warning{% endif %}">
+                <div>
+                    <span class="token-org">{{ org_name }}</span>
+                </div>
+                <div class="token-expiry">
+                    Token expires: {{ token_expiry }}
+                    {% if token_warning %}<strong>(expires soon!)</strong>{% endif %}
+                </div>
+            </div>
+
+            <div class="stats-bar">
+                <div class="stat-item">
+                    <div class="stat-value">{{ total_apps }}</div>
+                    <div class="stat-label">Total Apps</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ total_licenses }}</div>
+                    <div class="stat-label">Total Licenses</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ assigned_licenses }}</div>
+                    <div class="stat-label">Assigned</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ available_licenses }}</div>
+                    <div class="stat-label">Available</div>
+                </div>
+            </div>
+
+            <div class="filter-bar">
+                <label>Platform:</label>
+                <select id="platformFilter" onchange="filterApps()">
+                    <option value="">All Platforms</option>
+                    <option value="iOS">iOS</option>
+                    <option value="macOS">macOS</option>
+                    <option value="watchOS">watchOS</option>
+                    <option value="tvOS">tvOS</option>
+                    <option value="visionOS">visionOS</option>
+                </select>
+                <label>Search:</label>
+                <input type="text" id="searchFilter" placeholder="App name..." onkeyup="filterApps()">
+                <label>
+                    <input type="checkbox" id="lowLicenses" onchange="filterApps()"> Show low licenses only
+                </label>
+            </div>
+
+            <table id="appsTable">
+                <thead>
+                    <tr>
+                        <th>Application</th>
+                        <th>Platforms</th>
+                        <th>Licenses</th>
+                        <th style="width:120px;">Usage</th>
+                        <th style="width:100px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for app in apps %}
+                    <tr data-platforms="{{ app.platforms | join(',') }}" data-name="{{ app.name | lower }}" data-available="{{ app.availableCount }}">
+                        <td>
+                            <div style="display:flex; align-items:center; gap:10px;">
+                                {% if app.icon %}
+                                <img src="{{ app.icon }}" alt="" style="width:40px; height:40px; border-radius:8px;">
+                                {% else %}
+                                <div style="width:40px; height:40px; border-radius:8px; background:#e5e7eb; display:flex; align-items:center; justify-content:center; color:#9ca3af; font-size:0.8em;">?</div>
+                                {% endif %}
+                                <div>
+                                    <div class="app-name">{{ app.name }}</div>
+                                    <div class="app-bundle">{{ app.bundleId or app.adamId }}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td>
+                            {% for platform in app.platforms %}
+                            <span class="platform-badge platform-{{ platform | lower }}">{{ platform }}</span>
+                            {% endfor %}
+                        </td>
+                        <td>
+                            <span {% if app.availableCount < 10 %}class="low-licenses"{% endif %}>
+                                {{ app.assignedCount }} / {{ app.totalCount }}
+                            </span>
+                            <div class="license-info">{{ app.availableCount }} available</div>
+                        </td>
+                        <td>
+                            <div class="license-bar">
+                                <div class="license-used" style="width: {{ (app.assignedCount / app.totalCount * 100) if app.totalCount > 0 else 0 }}%"></div>
+                            </div>
+                        </td>
+                        <td>
+                            <button class="btn btn-small" onclick="openVppModal('install', '{{ app.adamId }}', '{{ app.name }}', '{{ app.bundleId }}')">Install</button>
+                            <button class="btn btn-small btn-danger" onclick="openVppModal('remove', '{{ app.adamId }}', '{{ app.name }}', '{{ app.bundleId }}')">Remove</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- VPP Action Modal -->
+    <div id="vppModal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <h3 id="modalTitle">Install VPP App</h3>
+            <div class="modal-body">
+                <p><strong>App:</strong> <span id="modalAppName"></span></p>
+                <p><strong>Bundle ID:</strong> <span id="modalBundleId"></span></p>
+                <label>Select Devices:</label>
+                <select id="deviceSelect" multiple size="8">
+                    {% for device in devices %}
+                    <option value="{{ device.uuid }}|{{ device.serial }}">{{ device.hostname }} ({{ device.os }})</option>
+                    {% endfor %}
+                </select>
+                <small>Ctrl/Cmd + click for multiple selection</small>
+                <div id="modalResult" class="result-box" style="display:none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeVppModal()">Cancel</button>
+                <button class="btn" id="modalSubmit" onclick="executeVppAction()" style="background:#e89898;color:#fff;">Execute</button>
+            </div>
+        </div>
+    </div>
+
+    <style>
+    .btn-small { padding: 4px 8px; font-size: 0.85em; }
+    .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.4);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+    }
+    .modal-box {
+        background: #fff;
+        border: 1px solid #e7eaf2;
+        border-radius: 8px;
+        width: 450px;
+        max-width: 90%;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    }
+    .modal-box h3 {
+        margin: 0;
+        padding: 12px 15px;
+        background: #f7f8fa;
+        border-bottom: 1px solid #e7eaf2;
+        font-size: 1em;
+        color: #21243b;
+    }
+    .modal-box .modal-body {
+        padding: 15px;
+    }
+    .modal-box .modal-body p {
+        margin: 0 0 10px 0;
+        font-size: 0.9em;
+    }
+    .modal-box .modal-body label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: 500;
+        font-size: 0.9em;
+    }
+    .modal-box select {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
+        font-size: 0.9em;
+    }
+    .modal-box small {
+        display: block;
+        margin-top: 5px;
+        color: #6b7280;
+        font-size: 0.8em;
+    }
+    .modal-box .modal-footer {
+        padding: 12px 15px;
+        background: #f7f8fa;
+        border-top: 1px solid #e7eaf2;
+        text-align: right;
+    }
+    .modal-box .modal-footer .btn { margin-left: 8px; }
+    .result-box {
+        margin-top: 10px;
+        padding: 10px;
+        border-radius: 4px;
+        font-size: 0.9em;
+    }
+    .result-box.success { background: #d1fae5; color: #065f46; }
+    .result-box.error { background: #fee2e2; color: #991b1b; }
+    </style>
+
+    <script>
+    let currentAction = '';
+    let currentAdamId = '';
+    let currentBundleId = '';
+
+    function filterApps() {
+        const platform = document.getElementById('platformFilter').value;
+        const search = document.getElementById('searchFilter').value.toLowerCase();
+        const lowOnly = document.getElementById('lowLicenses').checked;
+
+        const rows = document.querySelectorAll('#appsTable tbody tr');
+        rows.forEach(row => {
+            const platforms = row.dataset.platforms || '';
+            const name = row.dataset.name || '';
+            const available = parseInt(row.dataset.available) || 0;
+
+            let show = true;
+
+            if (platform && !platforms.includes(platform)) {
+                show = false;
+            }
+            if (search && !name.includes(search)) {
+                show = false;
+            }
+            if (lowOnly && available >= 10) {
+                show = false;
+            }
+
+            row.style.display = show ? '' : 'none';
+        });
+    }
+
+    function openVppModal(action, adamId, appName, bundleId) {
+        currentAction = action;
+        currentAdamId = adamId;
+        currentBundleId = bundleId;
+
+        document.getElementById('modalTitle').textContent = action === 'install' ? 'Install VPP App' : 'Remove VPP App';
+        document.getElementById('modalAppName').textContent = appName;
+        document.getElementById('modalBundleId').textContent = bundleId || adamId;
+        const submitBtn = document.getElementById('modalSubmit');
+        submitBtn.textContent = action === 'install' ? 'Install' : 'Remove';
+        submitBtn.style.background = action === 'install' ? '#e89898' : '#dc2626';
+        document.getElementById('modalResult').style.display = 'none';
+        document.getElementById('deviceSelect').selectedIndex = -1;
+
+        document.getElementById('vppModal').style.display = 'flex';
+    }
+
+    function closeVppModal() {
+        document.getElementById('vppModal').style.display = 'none';
+    }
+
+    function executeVppAction() {
+        const select = document.getElementById('deviceSelect');
+        const selectedOptions = Array.from(select.selectedOptions);
+
+        if (selectedOptions.length === 0) {
+            alert('Please select at least one device');
+            return;
+        }
+
+        const devices = selectedOptions.map(opt => {
+            const [uuid, serial] = opt.value.split('|');
+            return { uuid, serial };
+        });
+
+        document.getElementById('modalSubmit').disabled = true;
+        document.getElementById('modalSubmit').textContent = 'Processing...';
+
+        fetch('/admin/api/vpp-action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: currentAction,
+                adamId: currentAdamId,
+                bundleId: currentBundleId,
+                devices: devices
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            const resultDiv = document.getElementById('modalResult');
+            resultDiv.style.display = 'block';
+
+            if (data.success) {
+                resultDiv.className = 'result-box success';
+                resultDiv.innerHTML = '<strong>Success!</strong><br>' + (data.output || '').replace(/\\n/g, '<br>');
+            } else {
+                resultDiv.className = 'result-box error';
+                resultDiv.innerHTML = '<strong>Error:</strong> ' + (data.error || 'Unknown error');
+            }
+
+            document.getElementById('modalSubmit').disabled = false;
+            document.getElementById('modalSubmit').textContent = currentAction === 'install' ? 'Install' : 'Remove';
+        })
+        .catch(err => {
+            const resultDiv = document.getElementById('modalResult');
+            resultDiv.style.display = 'block';
+            resultDiv.className = 'result-box error';
+            resultDiv.innerHTML = '<strong>Error:</strong> ' + err.message;
+
+            document.getElementById('modalSubmit').disabled = false;
+            document.getElementById('modalSubmit').textContent = currentAction === 'install' ? 'Install' : 'Remove';
+        });
+    }
+    </script>
+</body>
+</html>
+'''
+
+
+# =============================================================================
+# CONSOLIDATED COMMAND IMPLEMENTATIONS
+# =============================================================================
+
+def normalize_devices_param(devices):
+    """Normalize devices parameter to list of UDIDs"""
+    if not devices:
+        return []
+    if isinstance(devices, str):
+        return [d.strip() for d in devices.split(',') if d.strip()]
+    elif isinstance(devices, list):
+        return [str(d).strip() for d in devices if d and str(d).strip()]
+    return []
+
+
+def execute_manage_profiles(params, user_info):
+    """Handle Manage Profiles command (install/remove/list on one or more devices)"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    action = params.get('action')
+    devices = normalize_devices_param(params.get('devices'))
+    profile = params.get('profile')
+    identifier = params.get('identifier')
+
+    if not action:
+        return {'success': False, 'error': 'Missing required parameter: action'}
+    if not devices:
+        return {'success': False, 'error': 'Missing required parameter: devices'}
+
+    # Validate action-specific requirements
+    if action == 'install' and not profile:
+        return {'success': False, 'error': 'Profile is required for Install action'}
+    if action == 'remove' and not identifier:
+        return {'success': False, 'error': 'Profile Identifier is required for Remove action'}
+
+    # Map action to script
+    script_map = {
+        'install': 'install_profile',
+        'remove': 'remove_profile',
+        'list': 'profile_list'
+    }
+    script_name = script_map.get(action)
+    if not script_name:
+        return {'success': False, 'error': f'Invalid action: {action}'}
+
+    script_path = os.path.join(COMMANDS_DIR, script_name)
+
+    output_lines = []
+    output_lines.append("=" * 60)
+    output_lines.append(f"MANAGE PROFILES - {action.upper()}")
+    output_lines.append(f"Devices: {len(devices)}")
+    output_lines.append("=" * 60)
+
+    success_count = 0
+    fail_count = 0
+
+    def run_profile_cmd(udid):
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+            args = [script_path, udid]
+            if action == 'install':
+                # Resolve profile path
+                profile_path = profile
+                if not profile_path.startswith('/'):
+                    for pdir in PROFILE_DIRS.values():
+                        full_path = os.path.join(pdir, profile_path)
+                        if os.path.exists(full_path):
+                            profile_path = full_path
+                            break
+                args.append(profile_path)
+            elif action == 'remove':
+                args.append(identifier)
+
+            result = subprocess.run(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                cwd=COMMANDS_DIR,
+                env=env
+            )
+
+            if result.returncode == 0:
+                return {'success': True, 'udid': udid, 'output': result.stdout}
+            else:
+                return {'success': False, 'udid': udid, 'error': result.stderr or 'Command failed'}
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'udid': udid, 'error': 'Timeout'}
+        except Exception as e:
+            return {'success': False, 'udid': udid, 'error': str(e)}
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(run_profile_cmd, udid): udid for udid in devices}
+        for future in as_completed(futures):
+            result = future.result()
+            if result['success']:
+                success_count += 1
+                output_lines.append(f"[OK] {result['udid']}")
+                if action == 'list' and result.get('output'):
+                    output_lines.append(result['output'])
+            else:
+                fail_count += 1
+                output_lines.append(f"[FAIL] {result['udid']}: {result.get('error', 'Unknown error')}")
+
+    output_lines.append("")
+    output_lines.append("=" * 60)
+    output_lines.append(f"SUMMARY: {success_count} success, {fail_count} failed")
+    output_lines.append("=" * 60)
+
+    audit_log(
+        user=user_info.get('username'),
+        action='manage_profiles',
+        command='manage_profiles',
+        params=params,
+        result=f'{success_count} success, {fail_count} failed',
+        success=(fail_count == 0)
+    )
+
+    return {
+        'success': fail_count == 0,
+        'output': '\n'.join(output_lines)
+    }
+
+
+def execute_manage_ddm_sets(params, user_info):
+    """Handle Manage DDM Sets command (assign/remove on one or more devices)"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import urllib.request
+    import base64
+
+    action = params.get('action')
+    devices = normalize_devices_param(params.get('devices'))
+    set_name = params.get('set_name')
+
+    if not action:
+        return {'success': False, 'error': 'Missing required parameter: action'}
+    if not devices:
+        return {'success': False, 'error': 'Missing required parameter: devices'}
+    if not set_name:
+        return {'success': False, 'error': 'Missing required parameter: set_name'}
+
+    # Load environment for API access from environment.sh
+    nanohub_url = 'http://localhost:9004'
+    api_key = ''
+    try:
+        with open('/opt/nanohub/environment.sh', 'r') as f:
+            for line in f:
+                if line.startswith('export NANOHUB_URL='):
+                    nanohub_url = line.split('=', 1)[1].strip().strip('"\'')
+                elif line.startswith('export NANOHUB_API_KEY='):
+                    api_key = line.split('=', 1)[1].strip().strip('"\'')
+    except Exception:
+        pass
+
+    # For remove action, check which devices actually have the set assigned
+    device_sets_cache = {}
+    if action == 'remove':
+        auth_string = base64.b64encode(f"nanohub:{api_key}".encode()).decode()
+        for udid in devices:
+            try:
+                req = urllib.request.Request(
+                    f"{nanohub_url}/api/v1/ddm/enrollment-sets/{udid}",
+                    headers={'Authorization': f'Basic {auth_string}'}
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                    device_sets_cache[udid] = data if data else []
+            except Exception as e:
+                logger.error(f"Failed to get sets for {udid}: {e}")
+                device_sets_cache[udid] = []
+
+    # Use the DDM script
+    script_path = '/opt/nanohub/ddm/scripts/ddm-assign-device.sh'
+
+    output_lines = []
+    output_lines.append("=" * 60)
+    output_lines.append(f"MANAGE DDM SETS - {action.upper()}")
+    output_lines.append(f"Set: {set_name}")
+    output_lines.append(f"Devices: {len(devices)}")
+    output_lines.append("=" * 60)
+
+    success_count = 0
+    fail_count = 0
+    skip_count = 0
+
+    def run_ddm_cmd(udid):
+        # For remove action, check if device has the set assigned
+        if action == 'remove':
+            assigned_sets = device_sets_cache.get(udid, [])
+            if set_name not in assigned_sets:
+                return {
+                    'success': False,
+                    'udid': udid,
+                    'skipped': True,
+                    'error': f'Set not assigned (has: {", ".join(assigned_sets) if assigned_sets else "none"})'
+                }
+
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+            result = subprocess.run(
+                [script_path, action, udid, set_name],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                cwd='/opt/nanohub/ddm/scripts',
+                env=env
+            )
+
+            if result.returncode == 0:
+                return {'success': True, 'udid': udid, 'output': result.stdout}
+            else:
+                return {'success': False, 'udid': udid, 'error': result.stderr or 'Command failed'}
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'udid': udid, 'error': 'Timeout'}
+        except Exception as e:
+            return {'success': False, 'udid': udid, 'error': str(e)}
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(run_ddm_cmd, udid): udid for udid in devices}
+        for future in as_completed(futures):
+            result = future.result()
+            if result['success']:
+                success_count += 1
+                output_lines.append(f"[OK] {result['udid']}")
+            elif result.get('skipped'):
+                skip_count += 1
+                output_lines.append(f"[SKIP] {result['udid']}: {result.get('error', 'Unknown error')}")
+            else:
+                fail_count += 1
+                output_lines.append(f"[FAIL] {result['udid']}: {result.get('error', 'Unknown error')}")
+
+    output_lines.append("")
+    output_lines.append("=" * 60)
+    summary_parts = [f"{success_count} success"]
+    if skip_count > 0:
+        summary_parts.append(f"{skip_count} skipped")
+    summary_parts.append(f"{fail_count} failed")
+    output_lines.append(f"SUMMARY: {', '.join(summary_parts)}")
+    output_lines.append("=" * 60)
+
+    audit_log(
+        user=user_info.get('username'),
+        action='manage_ddm_sets',
+        command='manage_ddm_sets',
+        params=params,
+        result=f'{success_count} success, {skip_count} skipped, {fail_count} failed',
+        success=(fail_count == 0 and skip_count == 0)
+    )
+
+    return {
+        'success': fail_count == 0 and skip_count == 0,
+        'output': '\n'.join(output_lines)
+    }
+
+
+def execute_install_application(params, user_info):
+    """Handle Install Application command (on one or more devices)"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    devices = normalize_devices_param(params.get('devices'))
+    manifest_url = params.get('manifest_url')
+
+    if not devices:
+        return {'success': False, 'error': 'Missing required parameter: devices'}
+    if not manifest_url:
+        return {'success': False, 'error': 'Missing required parameter: manifest_url'}
+
+    script_path = os.path.join(COMMANDS_DIR, 'install_application')
+
+    output_lines = []
+    output_lines.append("=" * 60)
+    output_lines.append("INSTALL APPLICATION")
+    output_lines.append(f"Manifest: {manifest_url}")
+    output_lines.append(f"Devices: {len(devices)}")
+    output_lines.append("=" * 60)
+
+    success_count = 0
+    fail_count = 0
+
+    def run_install_cmd(udid):
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+            result = subprocess.run(
+                [script_path, udid, manifest_url],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                cwd=COMMANDS_DIR,
+                env=env
+            )
+
+            if result.returncode == 0:
+                return {'success': True, 'udid': udid}
+            else:
+                return {'success': False, 'udid': udid, 'error': result.stderr or 'Command failed'}
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'udid': udid, 'error': 'Timeout'}
+        except Exception as e:
+            return {'success': False, 'udid': udid, 'error': str(e)}
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(run_install_cmd, udid): udid for udid in devices}
+        for future in as_completed(futures):
+            result = future.result()
+            if result['success']:
+                success_count += 1
+                output_lines.append(f"[OK] {result['udid']}")
+            else:
+                fail_count += 1
+                output_lines.append(f"[FAIL] {result['udid']}: {result.get('error', 'Unknown error')}")
+
+    output_lines.append("")
+    output_lines.append("=" * 60)
+    output_lines.append(f"SUMMARY: {success_count} success, {fail_count} failed")
+    output_lines.append("=" * 60)
+
+    audit_log(
+        user=user_info.get('username'),
+        action='install_application',
+        command='install_application',
+        params=params,
+        result=f'{success_count} success, {fail_count} failed',
+        success=(fail_count == 0)
+    )
+
+    return {
+        'success': fail_count == 0,
+        'output': '\n'.join(output_lines)
+    }
+
+
+def execute_device_action(params, user_info):
+    """Handle Device Action command (lock/unlock/restart/erase/clear_passcode)"""
+    action = params.get('action')
+    udid = sanitize_param(params.get('udid', ''))
+    pin = params.get('pin', '')
+    message = params.get('message', '')
+    confirm_erase = params.get('confirm_erase', '')
+
+    if not action:
+        return {'success': False, 'error': 'Missing required parameter: action'}
+    if not udid:
+        return {'success': False, 'error': 'Missing required parameter: udid'}
+
+    # Map action to script
+    script_map = {
+        'lock': 'lock_device',
+        'unlock': 'unlock_device',
+        'restart': 'restart_device',
+        'erase': 'erase_device',
+        'clear_passcode': 'unlock_device'  # Same as unlock
+    }
+
+    script_name = script_map.get(action)
+    if not script_name:
+        return {'success': False, 'error': f'Invalid action: {action}'}
+
+    # Check admin permission and confirmation for erase
+    if action == 'erase':
+        user_role = user_info.get('role', 'report')
+        if user_role not in ['admin', 'restricted-admin']:
+            return {'success': False, 'error': 'Erase requires admin permission'}
+        # Require typing "ERASE" to confirm
+        if confirm_erase != 'ERASE':
+            return {'success': False, 'error': 'To erase device, you must type "ERASE" in the confirmation field'}
+
+    script_path = os.path.join(COMMANDS_DIR, script_name)
+
+    args = [script_path, udid]
+
+    # Add optional parameters for lock/erase
+    if action == 'lock':
+        if pin:
+            args.append(sanitize_param(pin))
+        if message:
+            args.append(sanitize_param(message))
+    elif action == 'erase':
+        if pin:
+            args.append(sanitize_param(pin))
+
+    try:
+        env = os.environ.copy()
+        env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+        result = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+            cwd=COMMANDS_DIR,
+            env=env
+        )
+
+        output = result.stdout + result.stderr
+        success = result.returncode == 0
+
+        audit_log(
+            user=user_info.get('username'),
+            action='device_action',
+            command=f'device_action:{action}',
+            params=params,
+            result=output,
+            success=success
+        )
+
+        return {
+            'success': success,
+            'output': output,
+            'return_code': result.returncode
+        }
+
+    except subprocess.TimeoutExpired:
+        return {'success': False, 'error': 'Command timed out'}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+def execute_schedule_os_update(params, user_info):
+    """Handle Schedule OS Update command (on one or more devices)"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    action = params.get('action')
+    devices = normalize_devices_param(params.get('devices'))
+    key = params.get('key', '')
+    version = params.get('version', '')
+    deferrals = params.get('deferrals', '')
+    priority = params.get('priority', '')
+
+    if not action:
+        return {'success': False, 'error': 'Missing required parameter: action'}
+    if not devices:
+        return {'success': False, 'error': 'Missing required parameter: devices'}
+
+    script_path = os.path.join(COMMANDS_DIR, 'schedule_os_update')
+
+    output_lines = []
+    output_lines.append("=" * 60)
+    output_lines.append(f"SCHEDULE OS UPDATE - {action}")
+    output_lines.append(f"Devices: {len(devices)}")
+    output_lines.append("=" * 60)
+
+    success_count = 0
+    fail_count = 0
+
+    def run_update_cmd(udid):
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+            args = [script_path, udid, action]
+            if key:
+                args.extend(['--key', sanitize_param(key)])
+            if version:
+                args.extend(['--version', sanitize_param(version)])
+            if deferrals:
+                args.extend(['--deferrals', sanitize_param(deferrals)])
+            if priority:
+                args.extend(['--priority', sanitize_param(priority)])
+
+            result = subprocess.run(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                cwd=COMMANDS_DIR,
+                env=env
+            )
+
+            if result.returncode == 0:
+                return {'success': True, 'udid': udid}
+            else:
+                return {'success': False, 'udid': udid, 'error': result.stderr or 'Command failed'}
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'udid': udid, 'error': 'Timeout'}
+        except Exception as e:
+            return {'success': False, 'udid': udid, 'error': str(e)}
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(run_update_cmd, udid): udid for udid in devices}
+        for future in as_completed(futures):
+            result = future.result()
+            if result['success']:
+                success_count += 1
+                output_lines.append(f"[OK] {result['udid']}")
+            else:
+                fail_count += 1
+                output_lines.append(f"[FAIL] {result['udid']}: {result.get('error', 'Unknown error')}")
+
+    output_lines.append("")
+    output_lines.append("=" * 60)
+    output_lines.append(f"SUMMARY: {success_count} success, {fail_count} failed")
+    output_lines.append("=" * 60)
+
+    audit_log(
+        user=user_info.get('username'),
+        action='schedule_os_update',
+        command='schedule_os_update',
+        params=params,
+        result=f'{success_count} success, {fail_count} failed',
+        success=(fail_count == 0)
+    )
+
+    return {
+        'success': fail_count == 0,
+        'output': '\n'.join(output_lines)
+    }
+
+
+def execute_manage_remote_desktop(params, user_info):
+    """Handle Manage Remote Desktop command (enable/disable on one or more devices)"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    action = params.get('action')
+    devices = normalize_devices_param(params.get('devices'))
+
+    if not action or action not in ['enable', 'disable']:
+        return {'success': False, 'error': 'Missing or invalid action. Use "enable" or "disable"'}
+    if not devices:
+        return {'success': False, 'error': 'Missing required parameter: devices'}
+
+    script_name = 'enable_rd' if action == 'enable' else 'disable_rd'
+    script_path = os.path.join(COMMANDS_DIR, script_name)
+
+    output_lines = []
+    output_lines.append("=" * 60)
+    output_lines.append(f"MANAGE REMOTE DESKTOP - {action.upper()}")
+    output_lines.append(f"Devices: {len(devices)}")
+    output_lines.append("=" * 60)
+
+    success_count = 0
+    fail_count = 0
+
+    def run_rd_cmd(udid):
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+            result = subprocess.run(
+                [script_path, udid],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                cwd=COMMANDS_DIR,
+                env=env
+            )
+
+            if result.returncode == 0:
+                return {'success': True, 'udid': udid}
+            else:
+                return {'success': False, 'udid': udid, 'error': result.stderr or 'Command failed'}
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'udid': udid, 'error': 'Timeout'}
+        except Exception as e:
+            return {'success': False, 'udid': udid, 'error': str(e)}
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(run_rd_cmd, udid): udid for udid in devices}
+        for future in as_completed(futures):
+            result = future.result()
+            if result['success']:
+                success_count += 1
+                output_lines.append(f"[OK] {result['udid']}")
+            else:
+                fail_count += 1
+                output_lines.append(f"[FAIL] {result['udid']}: {result.get('error', 'Unknown error')}")
+
+    output_lines.append("")
+    output_lines.append("=" * 60)
+    output_lines.append(f"SUMMARY: {success_count} success, {fail_count} failed")
+    output_lines.append("=" * 60)
+
+    audit_log(
+        user=user_info.get('username'),
+        action='manage_remote_desktop',
+        command='manage_remote_desktop',
+        params=params,
+        result=f'{success_count} success, {fail_count} failed',
+        success=(fail_count == 0)
+    )
+
+    return {
+        'success': fail_count == 0,
+        'output': '\n'.join(output_lines)
+    }
+
+
+def execute_manage_command_queue(params, user_info):
+    """Handle Manage Command Queue command (show/clear)"""
+    action = params.get('action')
+    udid = sanitize_param(params.get('udid', ''))
+
+    if not action or action not in ['show', 'clear']:
+        return {'success': False, 'error': 'Missing or invalid action. Use "show" or "clear"'}
+    if not udid:
+        return {'success': False, 'error': 'Missing required parameter: udid'}
+
+    output_lines = []
+    output_lines.append("=" * 60)
+    output_lines.append(f"COMMAND QUEUE - {action.upper()}")
+    output_lines.append(f"Device: {udid}")
+    output_lines.append("=" * 60)
+
+    if action == 'show':
+        # Query pending commands from enrollment_queue + commands tables
+        sql = f"""
+        SELECT
+            c.command_uuid,
+            c.request_type,
+            c.created_at,
+            TIMESTAMPDIFF(MINUTE, c.created_at, NOW()) as minutes_waiting
+        FROM commands c
+        JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+        LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid
+        WHERE eq.id = '{udid}'
+        AND cr.command_uuid IS NULL
+        ORDER BY c.created_at DESC
+        LIMIT 50
+        """
+        cmd = [
+            MYSQL_BIN,
+            '-h', DB_CONFIG['host'],
+            '-u', DB_CONFIG['user'],
+            f'-p{DB_CONFIG["password"]}',
+            DB_CONFIG['database'],
+            '-e', sql
+        ]
+
+        try:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if result.returncode == 0:
+                if result.stdout.strip():
+                    output_lines.append("")
+                    output_lines.append(result.stdout)
+                else:
+                    output_lines.append("")
+                    output_lines.append("No pending commands in queue.")
+                return {'success': True, 'output': '\n'.join(output_lines)}
+            else:
+                return {'success': False, 'error': result.stderr or 'Database query failed'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    elif action == 'clear':
+        # Use the existing clear_queue script with --auto flag
+        script_path = os.path.join(COMMANDS_DIR, 'clear_queue')
+
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+            result = subprocess.run(
+                [script_path, udid, '--auto'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                cwd=COMMANDS_DIR,
+                env=env
+            )
+
+            output_lines.append("")
+            output_lines.append(result.stdout)
+            if result.stderr:
+                output_lines.append(result.stderr)
+
+            audit_log(
+                user=user_info.get('username'),
+                action='clear_command_queue',
+                command='manage_command_queue',
+                params=params,
+                result='Queue cleared' if result.returncode == 0 else 'Failed',
+                success=(result.returncode == 0)
+            )
+
+            return {
+                'success': result.returncode == 0,
+                'output': '\n'.join(output_lines)
+            }
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'error': 'Command timed out'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+
+def execute_manage_vpp_app(params, user_info):
+    """Handle Manage VPP App command (install/remove for iOS/macOS)"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    platform = params.get('platform')
+    action = params.get('action')
+    devices = normalize_devices_param(params.get('devices'))
+    adam_id = params.get('adam_id')
+
+    if not platform or platform not in ['ios', 'macos']:
+        return {'success': False, 'error': 'Missing or invalid platform. Use "ios" or "macos"'}
+    if not action or action not in ['install', 'remove']:
+        return {'success': False, 'error': 'Missing or invalid action. Use "install" or "remove"'}
+    if not devices:
+        return {'success': False, 'error': 'Missing required parameter: devices'}
+    if not adam_id:
+        return {'success': False, 'error': 'Missing required parameter: adam_id'}
+
+    # Map to existing script names
+    script_map = {
+        ('ios', 'install'): 'install_vpp_app',
+        ('ios', 'remove'): 'remove_vpp_app',
+        ('macos', 'install'): 'install_vpp_app',
+        ('macos', 'remove'): 'remove_vpp_app'
+    }
+
+    script_name = script_map.get((platform, action))
+    script_path = os.path.join(COMMANDS_DIR, script_name)
+
+    output_lines = []
+    output_lines.append("=" * 60)
+    output_lines.append(f"MANAGE VPP APP - {platform.upper()} {action.upper()}")
+    output_lines.append(f"Adam ID: {adam_id}")
+    output_lines.append(f"Devices: {len(devices)}")
+    output_lines.append("=" * 60)
+
+    success_count = 0
+    fail_count = 0
+
+    def run_vpp_cmd(udid):
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+            result = subprocess.run(
+                [script_path, udid, adam_id],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                cwd=COMMANDS_DIR,
+                env=env
+            )
+
+            if result.returncode == 0:
+                return {'success': True, 'udid': udid}
+            else:
+                return {'success': False, 'udid': udid, 'error': result.stderr or 'Command failed'}
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'udid': udid, 'error': 'Timeout'}
+        except Exception as e:
+            return {'success': False, 'udid': udid, 'error': str(e)}
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(run_vpp_cmd, udid): udid for udid in devices}
+        for future in as_completed(futures):
+            result = future.result()
+            if result['success']:
+                success_count += 1
+                output_lines.append(f"[OK] {result['udid']}")
+            else:
+                fail_count += 1
+                output_lines.append(f"[FAIL] {result['udid']}: {result.get('error', 'Unknown error')}")
+
+    output_lines.append("")
+    output_lines.append("=" * 60)
+    output_lines.append(f"SUMMARY: {success_count} success, {fail_count} failed")
+    output_lines.append("=" * 60)
+
+    audit_log(
+        user=user_info.get('username'),
+        action='manage_vpp_app',
+        command='manage_vpp_app',
+        params=params,
+        result=f'{success_count} success, {fail_count} failed',
+        success=(fail_count == 0)
+    )
+
+    return {
+        'success': fail_count == 0,
+        'output': '\n'.join(output_lines)
+    }
 
 
 # =============================================================================
@@ -2537,27 +4224,120 @@ def admin_execute():
 @admin_bp.route('/history')
 @login_required_admin
 def admin_history():
-    """View execution history"""
+    """View execution history from MySQL with filters"""
+    import mysql.connector
+    from math import ceil
+
     user = session.get('user', {})
     history = []
+    total_count = 0
+    users_list = []
+
+    # Pagination
+    page = request.args.get('page', 1, type=int)
+    per_page = 50
+
+    # Filters
+    date_from = request.args.get('date_from', '')
+    date_to = request.args.get('date_to', '')
+    device_filter = request.args.get('device', '')
+    user_filter = request.args.get('user_filter', '')
+    status_filter = request.args.get('status', '')
 
     try:
-        if os.path.exists(AUDIT_LOG_PATH):
-            with open(AUDIT_LOG_PATH, 'r') as f:
-                lines = f.readlines()[-100:]
-                for line in reversed(lines):
-                    try:
-                        entry = json.loads(line.strip())
-                        history.append(entry)
-                    except json.JSONDecodeError:
-                        continue
+        conn = mysql.connector.connect(
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database']
+        )
+        cursor = conn.cursor(dictionary=True)
+
+        # Get list of users for filter dropdown
+        cursor.execute("SELECT DISTINCT user FROM command_history ORDER BY user")
+        users_list = [row['user'] for row in cursor.fetchall()]
+
+        # Build query with filters
+        where_clauses = ["timestamp >= DATE_SUB(NOW(), INTERVAL 90 DAY)"]
+        params = []
+
+        if date_from:
+            where_clauses.append("DATE(timestamp) >= %s")
+            params.append(date_from)
+
+        if date_to:
+            where_clauses.append("DATE(timestamp) <= %s")
+            params.append(date_to)
+
+        if device_filter:
+            where_clauses.append(
+                "(device_udid LIKE %s OR device_serial LIKE %s OR device_hostname LIKE %s)"
+            )
+            like_val = f"%{device_filter}%"
+            params.extend([like_val, like_val, like_val])
+
+        if user_filter:
+            where_clauses.append("user = %s")
+            params.append(user_filter)
+
+        if status_filter in ('0', '1'):
+            where_clauses.append("success = %s")
+            params.append(int(status_filter))
+
+        where_sql = " AND ".join(where_clauses)
+
+        # Get total count
+        cursor.execute(f"SELECT COUNT(*) as cnt FROM command_history WHERE {where_sql}", params)
+        total_count = cursor.fetchone()['cnt']
+
+        # Calculate pagination
+        total_pages = ceil(total_count / per_page) if total_count > 0 else 1
+        page = min(max(1, page), total_pages)
+        offset = (page - 1) * per_page
+
+        # Get paginated results
+        cursor.execute(f"""
+            SELECT id, timestamp, user, command_id, command_name, device_udid,
+                   device_serial, device_hostname, params, result_summary, success
+            FROM command_history
+            WHERE {where_sql}
+            ORDER BY timestamp DESC
+            LIMIT %s OFFSET %s
+        """, params + [per_page, offset])
+
+        history = cursor.fetchall()
+
+        # Parse params JSON for each entry
+        for entry in history:
+            if entry.get('params'):
+                try:
+                    entry['params'] = json.loads(entry['params'])
+                except:
+                    entry['params'] = {}
+        cursor.close()
+        conn.close()
+
+        # Run cleanup periodically (every 100 requests approximately)
+        import random
+        if random.randint(1, 100) == 1:
+            cleanup_old_history(90)
+
     except Exception as e:
-        logger.error(f"Failed to read audit log: {e}")
+        logger.error(f"Failed to read command history: {e}")
 
     return render_template_string(
         ADMIN_HISTORY_TEMPLATE,
         user=user,
-        history=history
+        history=history,
+        total_count=total_count,
+        total_pages=total_pages if 'total_pages' in dir() else 1,
+        page=page,
+        date_from=date_from,
+        date_to=date_to,
+        device_filter=device_filter,
+        user_filter=user_filter,
+        status_filter=status_filter,
+        users=users_list
     )
 
 
@@ -2573,6 +4353,199 @@ def admin_profiles():
         user=user,
         profiles=profiles
     )
+
+
+@admin_bp.route('/vpp')
+@login_required_admin
+def admin_vpp():
+    """VPP Licenses page - shows ABM app licenses"""
+    from datetime import datetime
+    import mysql.connector
+
+    user = session.get('user', {})
+
+    # Get token info
+    token_info = get_vpp_token_info()
+    org_name = token_info.get('orgName', 'Unknown') if token_info else 'Unknown'
+    token_expiry = token_info.get('expDate', 'Unknown') if token_info else 'Unknown'
+
+    # Check if token expires within 30 days
+    token_warning = False
+    if token_info and token_info.get('expDate'):
+        try:
+            exp_date = datetime.strptime(token_info['expDate'][:19], '%Y-%m-%dT%H:%M:%S')
+            days_until_expiry = (exp_date - datetime.now()).days
+            token_warning = days_until_expiry < 30
+        except Exception:
+            pass
+
+    # Format expiry date nicely
+    if token_expiry and token_expiry != 'Unknown':
+        try:
+            exp_date = datetime.strptime(token_expiry[:19], '%Y-%m-%dT%H:%M:%S')
+            token_expiry = exp_date.strftime('%Y-%m-%d')
+        except Exception:
+            pass
+
+    # Get devices for install/remove modal
+    devices = []
+    try:
+        conn = mysql.connector.connect(
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database']
+        )
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT uuid, serial, os, hostname FROM device_inventory ORDER BY hostname")
+        devices = cursor.fetchall()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to get devices: {e}")
+
+    # Get VPP apps
+    vpp_data = get_vpp_apps_with_names()
+
+    if 'error' in vpp_data:
+        return render_template_string(
+            ADMIN_VPP_TEMPLATE,
+            user=user,
+            error=vpp_data['error'],
+            apps=[],
+            devices=devices,
+            org_name=org_name,
+            token_expiry=token_expiry,
+            token_warning=token_warning,
+            total_apps=0,
+            total_licenses=0,
+            assigned_licenses=0,
+            available_licenses=0
+        )
+
+    apps = vpp_data.get('apps', [])
+
+    # Calculate totals
+    total_licenses = sum(app.get('totalCount', 0) for app in apps)
+    assigned_licenses = sum(app.get('assignedCount', 0) for app in apps)
+    available_licenses = sum(app.get('availableCount', 0) for app in apps)
+
+    return render_template_string(
+        ADMIN_VPP_TEMPLATE,
+        user=user,
+        apps=apps,
+        devices=devices,
+        org_name=org_name,
+        token_expiry=token_expiry,
+        token_warning=token_warning,
+        total_apps=len(apps),
+        total_licenses=total_licenses,
+        assigned_licenses=assigned_licenses,
+        available_licenses=available_licenses,
+        error=None
+    )
+
+
+@admin_bp.route('/api/vpp-action', methods=['POST'])
+@login_required_admin
+def api_vpp_action():
+    """Execute VPP install/remove action"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    user_info = session.get('user', {})
+    data = request.get_json()
+
+    action = data.get('action')  # 'install' or 'remove'
+    adam_id = data.get('adamId')
+    bundle_id = data.get('bundleId')
+    devices = data.get('devices', [])  # [{uuid, serial}, ...]
+
+    if not action or action not in ['install', 'remove']:
+        return jsonify({'success': False, 'error': 'Invalid action'})
+    if not adam_id:
+        return jsonify({'success': False, 'error': 'Missing adamId'})
+    if not devices:
+        return jsonify({'success': False, 'error': 'No devices selected'})
+
+    # Scripts
+    install_script = '/opt/nanohub/tools/api/commands/install_vpp_app'
+    remove_script = '/opt/nanohub/tools/api/commands/remove_vpp_app'
+    script_path = install_script if action == 'install' else remove_script
+
+    output_lines = []
+    success_count = 0
+    fail_count = 0
+
+    def run_vpp_cmd(device):
+        udid = device.get('uuid')
+        serial = device.get('serial')
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+
+            # Load VPP_TOKEN
+            try:
+                with open('/opt/nanohub/environment.sh', 'r') as f:
+                    for line in f:
+                        if line.startswith('export VPP_TOKEN='):
+                            env['VPP_TOKEN'] = line.split('=', 1)[1].strip().strip('"\'')
+                        elif line.startswith('export NANOHUB_API_KEY='):
+                            env['NANOHUB_API_KEY'] = line.split('=', 1)[1].strip().strip('"\'')
+            except Exception:
+                pass
+
+            if action == 'install':
+                # install_vpp_app <UDID> <ADAM_ID> <SERIAL> <BUNDLE_ID>
+                args = [script_path, udid, adam_id, serial, bundle_id or adam_id]
+            else:
+                # remove_vpp_app <UDID> <ADAM_ID> <SERIAL> <BUNDLE_ID>
+                args = [script_path, udid, adam_id, serial, bundle_id or adam_id]
+
+            result = subprocess.run(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+                env=env
+            )
+
+            if result.returncode == 0:
+                return {'success': True, 'udid': udid, 'output': result.stdout}
+            else:
+                return {'success': False, 'udid': udid, 'error': result.stderr or result.stdout or 'Command failed'}
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'udid': udid, 'error': 'Timeout'}
+        except Exception as e:
+            return {'success': False, 'udid': udid, 'error': str(e)}
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(run_vpp_cmd, d): d for d in devices}
+        for future in as_completed(futures):
+            result = future.result()
+            if result['success']:
+                success_count += 1
+                output_lines.append(f"[OK] {result['udid']}")
+            else:
+                fail_count += 1
+                output_lines.append(f"[FAIL] {result['udid']}: {result.get('error', 'Unknown')}")
+
+    output_lines.append(f"\nSummary: {success_count} success, {fail_count} failed")
+
+    audit_log(
+        user=user_info.get('username'),
+        action=f'vpp_{action}',
+        command=f'vpp_{action}',
+        params={'adamId': adam_id, 'bundleId': bundle_id, 'devices': [d.get('uuid') for d in devices]},
+        result=f'{success_count} success, {fail_count} failed',
+        success=(fail_count == 0)
+    )
+
+    return jsonify({
+        'success': fail_count == 0,
+        'output': '\n'.join(output_lines)
+    })
 
 
 @admin_bp.route('/api/commands')
@@ -2595,7 +4568,7 @@ def api_commands():
 def api_devices():
     """Get devices list (JSON), filtered by user's manifest_filter if any"""
     user = session.get('user', {})
-    manifest_filter = user.get('manifest_filter')  # e.g. 'bel-%' for bel-admin
+    manifest_filter = user.get('manifest_filter')  # e.g. 'site-%' for restricted-admin
     devices = get_devices_list(manifest_filter=manifest_filter)
     return jsonify(devices)
 
