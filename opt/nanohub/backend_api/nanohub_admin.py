@@ -43,7 +43,7 @@ executor = ThreadPoolExecutor(max_workers=10)
 DB_CONFIG = {
     'host': '127.0.0.1',
     'user': 'nanohub',
-    'password': 'your_db_password',
+    'password': '1stSlotoSQLAccount.',
     'database': 'nanohub'
 }
 
@@ -505,7 +505,7 @@ def execute_command(cmd_id, params, user_info):
     if not check_role_permission(user_role, cmd.get('min_role', 'admin')):
         return {'success': False, 'error': 'Insufficient permissions'}
 
-    # Validate device access for users with manifest_filter (e.g., restricted-admin)
+    # Validate device access for users with manifest_filter (e.g., bel-admin)
     udid = params.get('udid') or params.get('uuid')
     if udid and user_info.get('manifest_filter'):
         if not validate_device_access(udid, user_info):
@@ -828,7 +828,7 @@ def get_devices_list(manifest_filter=None):
     """Get list of devices from database, optionally filtered by manifest"""
     where_clause = ""
     if manifest_filter:
-        # manifest_filter is SQL LIKE pattern e.g. 'site-%'
+        # manifest_filter is SQL LIKE pattern e.g. 'bel-%'
         where_clause = f"WHERE di.manifest LIKE '{manifest_filter}'"
 
     sql = f"""
@@ -1009,7 +1009,7 @@ def validate_device_access(uuid, user_info):
         return False  # Device not found
 
     # Convert SQL LIKE pattern to simple check
-    # 'site-%' means manifest must start with 'site-'
+    # 'bel-%' means manifest must start with 'bel-'
     if manifest_filter.endswith('%'):
         prefix = manifest_filter[:-1]  # Remove '%'
         return device_manifest.startswith(prefix)
@@ -1037,7 +1037,7 @@ def execute_device_add(params, user_info):
     if not uuid_val or not serial or not os_type or not hostname:
         return {'success': False, 'error': 'Missing required fields: uuid, serial, os, hostname'}
 
-    # Validate manifest for users with manifest_filter (e.g., restricted-admin can only add site-* devices)
+    # Validate manifest for users with manifest_filter (e.g., bel-admin can only add bel-* devices)
     manifest_filter = user_info.get('manifest_filter')
     if manifest_filter:
         if manifest_filter.endswith('%'):
@@ -1324,9 +1324,9 @@ def execute_bulk_new_device_installation(params, user_info):
         output_lines.append("\n[PHASE 1] Installing base profiles...")
 
         # Common profiles for both branches
-        install_profile('company.macos.appleRoot.profile.signed.mobileconfig')
-        install_profile('company.macos.Root.profile.signed.mobileconfig')
-        install_profile('company.macos.EnergySaver.profile.signed.mobileconfig')
+        install_profile('sloto.macos.appleRoot.profile.signed.mobileconfig')
+        install_profile('sloto.macos.Root.profile.signed.mobileconfig')
+        install_profile('sloto.macos.EnergySaver.profile.signed.mobileconfig')
 
         output_lines.append("\n[PHASE 2] Installing Munki profile...")
 
@@ -1336,44 +1336,44 @@ def execute_bulk_new_device_installation(params, user_info):
 
         if munki_profile:
             install_profile(munki_profile)
-        elif branch == 'site-a':
+        elif branch == 'karlin':
             # Fallback for old format: 'default'/'tech' with branch determining profile
             if munki_type == 'tech':
-                install_profile(get_munki_profile('tech') or 'company.macos.Munki-Tech.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('tech') or 'sloto.macos.Munki-Tech.profile.signed.mobileconfig')
             else:
-                install_profile(get_munki_profile('default') or 'company.macos.Munki-Default.profile.signed.mobileconfig')
-        else:  # site-b with default/tech (fallback)
+                install_profile(get_munki_profile('default') or 'sloto.macos.Munki-Default.profile.signed.mobileconfig')
+        else:  # belehradska with default/tech (fallback)
             if munki_type == 'tech':
-                install_profile(get_munki_profile('site-b-tech') or 'company.macos.Munki-Site-B-Tech.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('bel-tech') or 'sloto.macos.Munki-Bel-Tech.profile.signed.mobileconfig')
             else:
-                install_profile(get_munki_profile('site-b-default') or 'company.macos.Munki-Site-B-Default.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('bel-default') or 'sloto.macos.Munki-Bel-Default.profile.signed.mobileconfig')
 
-        # Site-A specific SSO profile
-        if branch == 'site-a':
-            site_a_sso = get_value('SITE_A_SSO_PROFILE')
-            if site_a_sso:
-                install_profile(site_a_sso)
+        # Karlin-specific SSO profile
+        if branch == 'karlin':
+            karlin_sso = get_value('KARLIN_SSO_PROFILE')
+            if karlin_sso:
+                install_profile(karlin_sso)
 
         output_lines.append("\n[PHASE 3] Installing security profiles...")
 
         # Common profiles continued
-        install_profile('company.macos.Restrictions.profile.signed.mobileconfig')
-        install_profile('company.macos.Account-Disabled.profile.signed.mobileconfig')
-        install_profile('company.macos.Firewall.profile.signed.mobileconfig')
+        install_profile('sloto.macos.Restrictions.profile.signed.mobileconfig')
+        install_profile('sloto.macos.Account-Disabled.profile.signed.mobileconfig')
+        install_profile('sloto.macos.Firewall.profile.signed.mobileconfig')
 
         output_lines.append("\n[PHASE 4] Installing applications...")
 
         # Applications
-        install_application('https://repo.example.com/munki/company_mdmagent.plist')
-        install_application('https://repo.example.com/munki/company_munki7.plist')
+        install_application('https://repo.sloto.space/munki/sloto_mdmagent.plist')
+        install_application('https://repo.sloto.space/munki/sloto_munki7.plist')
 
-        # Branch-specific applications for Site-A
-        if branch == 'site-a':
-            install_application('https://repo.example.com/munki/company_drivemap.plist')
-            install_application('https://repo.example.com/munki/company_removeadmin_manifest.plist')
+        # Branch-specific applications for Karlin
+        if branch == 'karlin':
+            install_application('https://repo.sloto.space/munki/sloto_drivemap.plist')
+            install_application('https://repo.sloto.space/munki/sloto_removeadmin_manifest.plist')
 
-        # Directory Services (Site-A only, if enabled and hostname provided)
-        if branch == 'site-a' and install_directory_services == 'yes' and hostname:
+        # Directory Services (Karlin only, if enabled and hostname provided)
+        if branch == 'karlin' and install_directory_services == 'yes' and hostname:
             output_lines.append("\n[PHASE 5] Setting up Directory Services...")
 
             # Set hostname first
@@ -1386,16 +1386,16 @@ def execute_bulk_new_device_installation(params, user_info):
             time.sleep(WAIT_INTERVAL)
 
             # Install Directory Services profile
-            install_profile('company.macos.DirectoryServices.profile.signed.mobileconfig')
+            install_profile('sloto.macos.DirectoryServices.profile.signed.mobileconfig')
 
         # FileVault profile
         if install_filevault == 'yes':
             output_lines.append("\n[PHASE 6] Installing FileVault profile...")
             output_lines.append("NOTE: Client (not admin) should be logged in for FileVault!")
-            install_profile('company.macos.Filevault.profile.signed.mobileconfig')
+            install_profile('sloto.macos.Filevault.profile.signed.mobileconfig')
 
-        # WireGuard profile (Site-A only)
-        if branch == 'site-a' and install_wireguard == 'yes' and wireguard_username:
+        # WireGuard profile (Karlin only)
+        if branch == 'karlin' and install_wireguard == 'yes' and wireguard_username:
             output_lines.append("\n[PHASE 7] Installing WireGuard profile...")
 
             # Search for WireGuard profile in ALL subdirectories under wireguard_configs
@@ -1423,13 +1423,13 @@ def execute_bulk_new_device_installation(params, user_info):
     elif platform == 'ios':
         output_lines.append("\n[PHASE 1] Installing iOS profiles...")
 
-        install_profile('company.ios.appleRoot.profile.signed.mobileconfig')
-        install_profile('company.ios.Account-Disabled.profile.signed.mobileconfig')
-        install_profile('company.ios.Restrictions.profile.signed.mobileconfig')
-        install_profile('company.ios.whitelist.signed.mobileconfig')
+        install_profile('sloto.ios.appleRoot.profile.signed.mobileconfig')
+        install_profile('sloto.ios.Account-Disabled.profile.signed.mobileconfig')
+        install_profile('sloto.ios.Restrictions.profile.signed.mobileconfig')
+        install_profile('sloto.ios.whitelist.signed.mobileconfig')
 
-        # WireGuard profile for iOS (Site-A only)
-        if branch == 'site-a' and install_wireguard == 'yes' and wireguard_username:
+        # WireGuard profile for iOS (Karlin only)
+        if branch == 'karlin' and install_wireguard == 'yes' and wireguard_username:
             output_lines.append("\n[PHASE 2] Installing WireGuard profile...")
 
             # Search for WireGuard profile in ALL subdirectories under wireguard_configs
@@ -1844,9 +1844,8 @@ ADMIN_DASHBOARD_TEMPLATE = '''
 
             <div class="nav-tabs">
                 <a href="/admin" class="btn active">Commands</a>
-                <a href="/admin/history" class="btn">History</a>
-                <a href="/admin/profiles" class="btn">Profiles</a>
                 <a href="/admin/vpp" class="btn">VPP</a>
+                <a href="/admin/history" class="btn">History</a>
             </div>
 
             <div class="category-grid">
@@ -2671,9 +2670,8 @@ ADMIN_HISTORY_TEMPLATE = '''
 
             <div class="nav-tabs">
                 <a href="/admin" class="btn">Commands</a>
-                <a href="/admin/history" class="btn active">History</a>
-                <a href="/admin/profiles" class="btn">Profiles</a>
                 <a href="/admin/vpp" class="btn">VPP</a>
+                <a href="/admin/history" class="btn active">History</a>
             </div>
 
             <form method="GET" class="filter-form">
@@ -2863,9 +2861,8 @@ ADMIN_PROFILES_TEMPLATE = '''
 
             <div class="nav-tabs">
                 <a href="/admin" class="btn">Commands</a>
-                <a href="/admin/history" class="btn">History</a>
-                <a href="/admin/profiles" class="btn active">Profiles</a>
                 <a href="/admin/vpp" class="btn">VPP</a>
+                <a href="/admin/history" class="btn">History</a>
             </div>
 
             <div class="profile-section">
@@ -3027,9 +3024,8 @@ ADMIN_VPP_TEMPLATE = '''
 
             <div class="nav-tabs">
                 <a href="/admin" class="btn">Commands</a>
-                <a href="/admin/history" class="btn">History</a>
-                <a href="/admin/profiles" class="btn">Profiles</a>
                 <a href="/admin/vpp" class="btn active">VPP</a>
+                <a href="/admin/history" class="btn">History</a>
             </div>
 
             {% if error %}
@@ -3717,7 +3713,7 @@ def execute_device_action(params, user_info):
     # Check admin permission and confirmation for erase
     if action == 'erase':
         user_role = user_info.get('role', 'report')
-        if user_role not in ['admin', 'restricted-admin']:
+        if user_role not in ['admin', 'bel-admin']:
             return {'success': False, 'error': 'Erase requires admin permission'}
         # Require typing "ERASE" to confirm
         if confirm_erase != 'ERASE':
@@ -4568,7 +4564,7 @@ def api_commands():
 def api_devices():
     """Get devices list (JSON), filtered by user's manifest_filter if any"""
     user = session.get('user', {})
-    manifest_filter = user.get('manifest_filter')  # e.g. 'site-%' for restricted-admin
+    manifest_filter = user.get('manifest_filter')  # e.g. 'bel-%' for bel-admin
     devices = get_devices_list(manifest_filter=manifest_filter)
     return jsonify(devices)
 
