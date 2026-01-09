@@ -378,6 +378,10 @@ def execute_command(cmd_id, params, user_info):
             param_name = param_def['name']
             param_value = params.get(param_name)
 
+            # Apply default value if not provided
+            if not param_value and param_def.get('default'):
+                param_value = param_def['default']
+
             if param_def.get('required') and not param_value:
                 return {'success': False, 'error': f'Missing required parameter: {param_name}'}
 
@@ -1004,9 +1008,9 @@ def execute_bulk_new_device_installation(params, user_info):
         output_lines.append("\n[PHASE 1] Installing base profiles...")
 
         # Common profiles for both branches
-        install_profile('company.macos.appleRoot.profile.signed.mobileconfig')
-        install_profile('company.macos.Root.profile.signed.mobileconfig')
-        install_profile('company.macos.EnergySaver.profile.signed.mobileconfig')
+        install_profile('sloto.macos.appleRoot.profile.signed.mobileconfig')
+        install_profile('sloto.macos.Root.profile.signed.mobileconfig')
+        install_profile('sloto.macos.EnergySaver.profile.signed.mobileconfig')
 
         output_lines.append("\n[PHASE 2] Installing Munki profile...")
 
@@ -1019,14 +1023,14 @@ def execute_bulk_new_device_installation(params, user_info):
         elif branch == 'karlin':
             # Fallback for old format: 'default'/'tech' with branch determining profile
             if munki_type == 'tech':
-                install_profile(get_munki_profile('tech') or 'company.macos.Munki-Tech.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('tech') or 'sloto.macos.Munki-Tech.profile.signed.mobileconfig')
             else:
-                install_profile(get_munki_profile('default') or 'company.macos.Munki-Default.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('default') or 'sloto.macos.Munki-Default.profile.signed.mobileconfig')
         else:  # belehradska with default/tech (fallback)
             if munki_type == 'tech':
-                install_profile(get_munki_profile('bel-tech') or 'company.macos.Munki-Bel-Tech.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('bel-tech') or 'sloto.macos.Munki-Bel-Tech.profile.signed.mobileconfig')
             else:
-                install_profile(get_munki_profile('bel-default') or 'company.macos.Munki-Bel-Default.profile.signed.mobileconfig')
+                install_profile(get_munki_profile('bel-default') or 'sloto.macos.Munki-Bel-Default.profile.signed.mobileconfig')
 
         # Karlin-specific SSO profile
         if branch == 'karlin':
@@ -1037,20 +1041,20 @@ def execute_bulk_new_device_installation(params, user_info):
         output_lines.append("\n[PHASE 3] Installing security profiles...")
 
         # Common profiles continued
-        install_profile('company.macos.Restrictions.profile.signed.mobileconfig')
-        install_profile('company.macos.Account-Disabled.profile.signed.mobileconfig')
-        install_profile('company.macos.Firewall.profile.signed.mobileconfig')
+        install_profile('sloto.macos.Restrictions.profile.signed.mobileconfig')
+        install_profile('sloto.macos.Account-Disabled.profile.signed.mobileconfig')
+        install_profile('sloto.macos.Firewall.profile.signed.mobileconfig')
 
         output_lines.append("\n[PHASE 4] Installing applications...")
 
         # Applications
-        install_application('https://repo.example.com/munki/company_mdmagent.plist')
-        install_application('https://repo.example.com/munki/company_munki7.plist')
+        install_application('https://repo.sloto.space/munki/sloto_mdmagent.plist')
+        install_application('https://repo.sloto.space/munki/sloto_munki7.plist')
 
         # Branch-specific applications for Karlin
         if branch == 'karlin':
-            install_application('https://repo.example.com/munki/company_drivemap.plist')
-            install_application('https://repo.example.com/munki/company_removeadmin_manifest.plist')
+            install_application('https://repo.sloto.space/munki/sloto_drivemap.plist')
+            install_application('https://repo.sloto.space/munki/sloto_removeadmin_manifest.plist')
 
         # Directory Services (Karlin only, if enabled and hostname provided)
         if branch == 'karlin' and install_directory_services == 'yes' and hostname:
@@ -1066,13 +1070,13 @@ def execute_bulk_new_device_installation(params, user_info):
             time.sleep(WAIT_INTERVAL)
 
             # Install Directory Services profile
-            install_profile('company.macos.DirectoryServices.profile.signed.mobileconfig')
+            install_profile('sloto.macos.DirectoryServices.profile.signed.mobileconfig')
 
         # FileVault profile
         if install_filevault == 'yes':
             output_lines.append("\n[PHASE 6] Installing FileVault profile...")
             output_lines.append("NOTE: Client (not admin) should be logged in for FileVault!")
-            install_profile('company.macos.Filevault.profile.signed.mobileconfig')
+            install_profile('sloto.macos.Filevault.profile.signed.mobileconfig')
 
         # WireGuard profile (Karlin only)
         if branch == 'karlin' and install_wireguard == 'yes' and wireguard_username:
@@ -1103,10 +1107,10 @@ def execute_bulk_new_device_installation(params, user_info):
     elif platform == 'ios':
         output_lines.append("\n[PHASE 1] Installing iOS profiles...")
 
-        install_profile('company.ios.appleRoot.profile.signed.mobileconfig')
-        install_profile('company.ios.Account-Disabled.profile.signed.mobileconfig')
-        install_profile('company.ios.Restrictions.profile.signed.mobileconfig')
-        install_profile('company.ios.whitelist.signed.mobileconfig')
+        install_profile('sloto.ios.appleRoot.profile.signed.mobileconfig')
+        install_profile('sloto.ios.Account-Disabled.profile.signed.mobileconfig')
+        install_profile('sloto.ios.Restrictions.profile.signed.mobileconfig')
+        install_profile('sloto.ios.whitelist.signed.mobileconfig')
 
         # WireGuard profile for iOS (Karlin only)
         if branch == 'karlin' and install_wireguard == 'yes' and wireguard_username:

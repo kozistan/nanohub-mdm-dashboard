@@ -2,8 +2,8 @@
 
 Web-based management dashboard for Apple MDM (Mobile Device Management) using NanoHUB backend with LDAP authentication and comprehensive admin panel.
 
-**Version:** 1.8
-**Last Updated:** 2026-01-08
+**Version:** 1.9
+**Last Updated:** 2026-01-09
 
 ## Features
 
@@ -13,8 +13,9 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Real-time Device Status**: Online/Active/Offline status indicators
 - **Device Search**: Search by UUID, serial number, or hostname
 - **Parallel Execution**: 10-20x faster bulk operations with race condition fixes
+- **DDM Support**: Declarative Device Management with KMFDDM integration
 
-### Admin Panel (39 commands, 10 categories)
+### Admin Panel (45 commands, 11 categories)
 - **Device Setup**: Automated installation workflows for new devices
 - **Profiles**: Install, remove, list profiles (bulk operations supported)
 - **Applications**: Install and manage applications
@@ -25,6 +26,7 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Diagnostics**: Device information, MDM analyzer, system reports
 - **VPP Apps**: Volume Purchase Program app management
 - **Database Tools**: Device inventory CRUD operations
+- **DDM**: Declarative Device Management - status, assign sets, upload declarations
 
 ### Role-Based Access Control
 
@@ -397,6 +399,131 @@ Use Apple Configurator 2 or a signing tool to sign profiles:
 security cms -S -N "Your Signing Identity" -i unsigned.mobileconfig -o signed.mobileconfig
 ```
 
+## DDM (Declarative Device Management)
+
+DDM is Apple's newer device management approach that runs parallel to traditional MDM. It uses declarative configurations that devices apply autonomously.
+
+### DDM Architecture
+
+```
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│   Admin Panel   │────────▶│    NanoMDM       │────────▶│   KMFDDM        │
+│   (DDM cmds)    │         │    API           │         │   (DDM Engine)  │
+└─────────────────┘         └──────────────────┘         └─────────────────┘
+                                    │                            │
+                                    │                    ┌───────┴───────┐
+                                    ▼                    ▼               ▼
+                            ┌─────────────┐      ┌─────────────┐  ┌─────────────┐
+                            │   MySQL     │      │ Declarations│  │    Sets     │
+                            │   (status)  │      │   (JSON)    │  │  (groups)   │
+                            └─────────────┘      └─────────────┘  └─────────────┘
+```
+
+### DDM Hierarchy
+
+1. **Declarations** - Individual configuration policies (JSON files)
+2. **Sets** - Groups of declarations assigned together
+3. **Enrollments** - Device assignments to sets
+
+### Available Declaration Types (macOS/iOS)
+
+| Type | Description | Platform |
+|------|-------------|----------|
+| `com.apple.configuration.passcode.settings` | Passcode requirements | macOS, iOS |
+| `com.apple.configuration.softwareupdate.settings` | Software update policy | macOS, iOS |
+| `com.apple.configuration.screensharing.host.settings` | Screen sharing settings | macOS |
+| `com.apple.management.organization-info` | Organization information | macOS, iOS |
+| `com.apple.activation.simple` | Activation declaration | macOS, iOS |
+
+**Note:** FileVault and Firewall are NOT available as DDM declarations - use traditional MDM profiles.
+
+### DDM Directory Structure
+
+```
+/opt/nanohub/ddm/
+├── declarations/           # DDM declaration JSON files
+│   ├── com.sloto.ddm.activation.ios.json
+│   ├── com.sloto.ddm.activation.macos-bel.json
+│   ├── com.sloto.ddm.activation.macos-karlin.json
+│   ├── com.sloto.ddm.org-info.json
+│   ├── com.sloto.ddm.passcode.json
+│   ├── com.sloto.ddm.screensharing.json
+│   ├── com.sloto.ddm.softwareupdate.ios.json
+│   └── com.sloto.ddm.softwareupdate.macos.json
+├── sets/                   # Set definition files (list of declarations)
+│   ├── sloto-ios-bel.txt
+│   ├── sloto-ios-karlin.txt
+│   ├── sloto-macos-bel-default.txt
+│   ├── sloto-macos-bel-tech.txt
+│   ├── sloto-macos-karlin-default.txt
+│   └── sloto-macos-karlin-tech.txt
+└── scripts/                # DDM management scripts
+    ├── ddm-upload-declarations.sh
+    ├── ddm-create-sets.sh
+    ├── ddm-assign-device.sh
+    ├── ddm-bulk-assign.sh
+    └── ddm-status.sh
+```
+
+### DDM Scripts
+
+All scripts use environment variables from `/opt/nanohub/environment.sh`:
+
+```bash
+# Upload all declarations to server
+/opt/nanohub/ddm/scripts/ddm-upload-declarations.sh
+
+# Create sets from definition files
+/opt/nanohub/ddm/scripts/ddm-create-sets.sh
+
+# Assign set to device
+/opt/nanohub/ddm/scripts/ddm-assign-device.sh <UDID> <set-name>
+
+# View DDM status
+/opt/nanohub/ddm/scripts/ddm-status.sh all|declarations|sets|device <UDID>
+```
+
+### Admin Panel DDM Commands
+
+| Command | Description |
+|---------|-------------|
+| DDM Status | View declarations, sets, or device enrollment status |
+| Assign DDM Set | Assign a DDM set to a device |
+| Bulk DDM Assign | Assign DDM sets to multiple devices |
+| Upload Declarations | Upload all declarations to server |
+| Create Sets | Create/update all DDM sets |
+
+### DDM Database Tables (MySQL)
+
+```sql
+-- DDM declarations
+SELECT * FROM declarations;
+
+-- Set-declaration mappings
+SELECT * FROM set_declarations;
+
+-- Device-set assignments
+SELECT * FROM enrollment_sets;
+
+-- Declaration status from devices
+SELECT * FROM status_declarations;
+
+-- Status errors (for troubleshooting)
+SELECT * FROM status_errors;
+```
+
+### Verifying DDM on Client
+
+```bash
+# Check MDM enrollment
+profiles status -type enrollment
+
+# View DDM logs
+log show --predicate 'eventMessage CONTAINS "declaration" OR eventMessage CONTAINS "DDM"' --last 1h
+
+# Note: DDM declarations don't appear in 'profiles show' - they're processed directly by system services
+```
+
 ## Files Structure
 
 ```
@@ -408,9 +535,14 @@ security cms -S -N "Your Signing Identity" -i unsigned.mobileconfig -o signed.mo
 │   ├── command_registry.py     # MDM command definitions
 │   ├── mdm-flask-api_wrappper.py # Legacy API wrapper
 │   └── nanohub_environment     # Environment configuration
+├── ddm/                        # Declarative Device Management
+│   ├── declarations/           # DDM declaration JSON files
+│   ├── sets/                   # Set definition files
+│   └── scripts/                # DDM management scripts
 ├── profiles/                   # MDM configuration profiles (not in repo)
 │   └── wireguard_configs/      # WireGuard VPN profiles (not in repo)
 ├── tools/api/commands/         # MDM command scripts
+├── environment.sh              # Environment variables (API keys, URLs)
 └── venv/                       # Python virtual environment
 
 /var/www/mdm-web/
@@ -438,6 +570,7 @@ MIT License - See LICENSE file for details.
 ## Acknowledgments
 
 - Built on NanoMDM by micromdm
+- DDM support via KMFDDM by jessepeterson
 - Uses Flask web framework
 - ldap3 for Active Directory authentication
 - Frontend with vanilla JavaScript (no frameworks)

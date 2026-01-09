@@ -103,7 +103,7 @@ echo "  Command UUID: $CMD_UUID"
 
 # Send InstallApplication command to NanoMDM
 RESPONSE=$(curl -s -T "$TEMP_PLIST" \
-  -u "nanohub:ddce14cd1184371050150aaeaef30d65ae5441a3d5ccdf3099cd815f3bb5c774" \
+  -u "nanohub:YOUR_API_KEY" \
   -w "HTTP_CODE:%{http_code}" \
   "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
 

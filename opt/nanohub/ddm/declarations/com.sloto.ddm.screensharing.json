@@ -1,0 +1,7 @@
+{
+    "Type": "com.apple.configuration.screensharing.host.settings",
+    "Identifier": "com.sloto.ddm.screensharing",
+    "Payload": {
+        "Enabled": true
+    }
+}

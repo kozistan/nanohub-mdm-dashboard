@@ -1,0 +1,12 @@
+{
+    "Type": "com.apple.configuration.softwareupdate.settings",
+    "Identifier": "com.sloto.ddm.softwareupdate.macos",
+    "Payload": {
+        "AutomaticCheckEnabled": true,
+        "AutomaticDownloadEnabled": true,
+        "AutomaticallyInstallMacOSUpdates": true,
+        "AutomaticallyInstallAppUpdates": true,
+        "ConfigDataInstall": true,
+        "CriticalUpdateInstall": true
+    }
+}

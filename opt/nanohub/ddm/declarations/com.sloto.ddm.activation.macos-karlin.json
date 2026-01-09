@@ -1,0 +1,11 @@
+{
+    "Type": "com.apple.activation.simple",
+    "Identifier": "com.sloto.ddm.activation.macos-karlin",
+    "Payload": {
+        "StandardConfigurations": [
+            "com.sloto.ddm.passcode",
+            "com.sloto.ddm.softwareupdate.macos",
+            "com.sloto.ddm.screensharing"
+        ]
+    }
+}
