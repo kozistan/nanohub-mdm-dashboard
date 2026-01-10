@@ -44,7 +44,7 @@ COMMANDS = {
     'bulk_new_device_installation': {
         'name': 'New Device Installation',
         'category': 'setup',
-        'description': 'Automated installation workflow for new devices (Site A/B branches)',
+        'description': 'Automated installation workflow for new devices (Karlin/Belehradska branches)',
         'script': '_internal_bulk_install',
         'parameters': [
             {'name': 'branch', 'label': 'Branch', 'type': 'select', 'required': True,
@@ -81,88 +81,35 @@ COMMANDS = {
     },
 
     # =========================================================================
-    # PROFILES
+    # PROFILES (Consolidated)
     # =========================================================================
-    'install_profile': {
-        'name': 'Install Profile',
+    'manage_profiles': {
+        'name': 'Manage Profiles',
         'category': 'profiles',
-        'description': 'Install mobileconfig profile to device',
-        'script': 'install_profile',
+        'description': 'Install, remove or list profiles on one or more devices',
+        'script': '_internal_manage_profiles',
         'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-            {'name': 'profile', 'label': 'Profile', 'type': 'profile', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': True,
-    },
-    'remove_profile': {
-        'name': 'Remove Profile',
-        'category': 'profiles',
-        'description': 'Remove installed profile from device',
-        'script': 'remove_profile',
-        'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-            {'name': 'identifier', 'label': 'Profile Identifier', 'type': 'string', 'required': True,
-             'placeholder': 'com.example.profile'},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': True,
-    },
-    'profile_list': {
-        'name': 'List Profiles',
-        'category': 'profiles',
-        'description': 'List all installed profiles on device',
-        'script': 'profile_list',
-        'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'report',
-        'bulk_supported': False,
-    },
-    'bulk_install_profile': {
-        'name': 'Bulk Install Profile',
-        'category': 'profiles',
-        'description': 'Install profile to multiple devices',
-        'script': 'bulk_install_profile',
-        'parameters': [
+            {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
+             'options': [
+                 {'value': 'install', 'label': 'Install Profile'},
+                 {'value': 'remove', 'label': 'Remove Profile'},
+                 {'value': 'list', 'label': 'List Installed Profiles'},
+             ]},
             {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
-            {'name': 'profile', 'label': 'Profile', 'type': 'profile', 'required': True},
+            {'name': 'profile', 'label': 'Profile (for Install)', 'type': 'profile', 'required': False,
+             'help': 'Required for Install action'},
+            {'name': 'identifier', 'label': 'Profile Identifier (for Remove)', 'type': 'string', 'required': False,
+             'placeholder': 'com.example.profile',
+             'help': 'Required for Remove action'},
         ],
         'dangerous': False,
         'min_role': 'operator',
         'bulk_supported': False,
-    },
-    'bulk_remove_profile': {
-        'name': 'Bulk Remove Profile',
-        'category': 'profiles',
-        'description': 'Remove profile from multiple devices',
-        'script': 'bulk_remove_profile',
-        'parameters': [
-            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
-            {'name': 'identifier', 'label': 'Profile Identifier', 'type': 'string', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': False,
-    },
-    'sign_profile': {
-        'name': 'Sign Profile',
-        'category': 'profiles',
-        'description': 'Sign a mobileconfig profile',
-        'script': 'sign_profile',
-        'parameters': [
-            {'name': 'profile', 'label': 'Profile Path', 'type': 'string', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'admin',
-        'bulk_supported': False,
+        'info_text': 'Manage profiles on selected devices. Select one or multiple devices. For Install: select a profile. For Remove: enter profile identifier.',
     },
 
     # =========================================================================
-    # DDM (Declarative Device Management)
+    # DDM (Declarative Device Management) - Consolidated
     # =========================================================================
     'ddm_status': {
         'name': 'DDM Status',
@@ -186,95 +133,65 @@ COMMANDS = {
         'bulk_supported': False,
         'info_text': 'View DDM configuration: declarations (policies), sets (device groups), or specific device enrollment.',
     },
-    'ddm_assign_device': {
-        'name': 'Assign DDM Set',
+    'manage_ddm_sets': {
+        'name': 'Manage DDM Sets',
         'category': 'ddm',
-        'description': 'Assign a DDM set to a device',
-        'script': 'ddm-assign-device.sh',
-        'script_dir': '/opt/nanohub/ddm/scripts',
+        'description': 'Assign or remove DDM sets on one or more devices',
+        'script': '_internal_manage_ddm_sets',
         'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-            {'name': 'set_name', 'label': 'DDM Set', 'type': 'select', 'required': True,
+            {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True, 'default': 'assign',
              'options': [
-                 {'value': 'macos-site-a-default', 'label': 'macOS Site A Default'},
-                 {'value': 'macos-site-a-tech', 'label': 'macOS Site A Tech'},
-                 {'value': 'macos-site-b-default', 'label': 'macOS Site B Default'},
-                 {'value': 'macos-site-b-tech', 'label': 'macOS Site B Tech'},
-                 {'value': 'ios-site-a', 'label': 'iOS Site A'},
-                 {'value': 'ios-site-b', 'label': 'iOS Site B'},
+                 {'value': 'assign', 'label': 'Assign Set'},
+                 {'value': 'remove', 'label': 'Remove Set'},
              ]},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': False,
-        'info_text': 'Assign a DDM configuration set to a device. The device will receive declarations on next check-in.',
-    },
-    'ddm_bulk_assign': {
-        'name': 'Bulk Assign DDM Set',
-        'category': 'ddm',
-        'description': 'Assign a DDM set to multiple devices',
-        'script': 'ddm-bulk-assign.sh',
-        'script_dir': '/opt/nanohub/ddm/scripts',
-        'parameters': [
             {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
             {'name': 'set_name', 'label': 'DDM Set', 'type': 'select', 'required': True,
              'options': [
-                 {'value': 'macos-site-a-default', 'label': 'macOS Site A Default'},
-                 {'value': 'macos-site-a-tech', 'label': 'macOS Site A Tech'},
-                 {'value': 'macos-site-b-default', 'label': 'macOS Site B Default'},
-                 {'value': 'macos-site-b-tech', 'label': 'macOS Site B Tech'},
-                 {'value': 'ios-site-a', 'label': 'iOS Site A'},
-                 {'value': 'ios-site-b', 'label': 'iOS Site B'},
+                 {'value': 'sloto-macos-karlin-default', 'label': 'macOS Karlin Default'},
+                 {'value': 'sloto-macos-karlin-tech', 'label': 'macOS Karlin Tech'},
+                 {'value': 'sloto-macos-bel-default', 'label': 'macOS Belehradska Default'},
+                 {'value': 'sloto-macos-bel-tech', 'label': 'macOS Belehradska Tech'},
+                 {'value': 'sloto-ios-karlin', 'label': 'iOS Karlin'},
+                 {'value': 'sloto-ios-bel', 'label': 'iOS Belehradska'},
              ]},
         ],
         'dangerous': False,
         'min_role': 'operator',
         'bulk_supported': False,
-        'info_text': 'Assign a DDM configuration set to multiple devices at once.',
+        'info_text': 'Assign or remove DDM configuration sets. Select one or multiple devices. DDM sets are additive - to replace a set, remove the old one first.',
     },
-    'ddm_upload_declarations': {
-        'name': 'Upload Declarations',
+    'ddm_force_sync': {
+        'name': 'DDM Force Sync',
         'category': 'ddm',
-        'description': 'Upload all DDM declarations to server',
-        'script': 'ddm-upload-declarations.sh',
+        'description': 'Send push to force device DDM sync',
+        'script': 'ddm-force-sync.sh',
         'script_dir': '/opt/nanohub/ddm/scripts',
-        'parameters': [],
-        'dangerous': True,
-        'danger_level': 'medium',
-        'min_role': 'admin',
+        'parameters': [
+            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
+        ],
+        'dangerous': False,
+        'min_role': 'operator',
         'bulk_supported': False,
-        'info_text': 'Upload all declaration JSON files from /opt/nanohub/ddm/declarations/ to DDM server.',
-    },
-    'ddm_create_sets': {
-        'name': 'Create Sets',
-        'category': 'ddm',
-        'description': 'Create all DDM sets on server',
-        'script': 'ddm-create-sets.sh',
-        'script_dir': '/opt/nanohub/ddm/scripts',
-        'parameters': [],
-        'dangerous': True,
-        'danger_level': 'medium',
-        'min_role': 'admin',
-        'bulk_supported': False,
-        'info_text': 'Create all DDM sets from /opt/nanohub/ddm/sets/ and bind declarations to them.',
+        'info_text': 'Send push notification to device to force DDM declarations sync.',
     },
 
     # =========================================================================
-    # APPLICATIONS
+    # APPLICATIONS (Consolidated)
     # =========================================================================
     'install_application': {
         'name': 'Install Application',
         'category': 'apps',
-        'description': 'Install application on device',
-        'script': 'install_application',
+        'description': 'Install application on one or more devices',
+        'script': '_internal_install_application',
         'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
+            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
             {'name': 'manifest_url', 'label': 'Manifest URL', 'type': 'string', 'required': True,
              'placeholder': 'https://example.com/app.plist'},
         ],
         'dangerous': False,
         'min_role': 'operator',
-        'bulk_supported': True,
+        'bulk_supported': False,
+        'info_text': 'Install application via manifest URL. Select one or multiple devices.',
     },
     'installed_application_list': {
         'name': 'List Installed Apps',
@@ -288,94 +205,77 @@ COMMANDS = {
         'min_role': 'report',
         'bulk_supported': False,
     },
-    'bulk_install_application': {
-        'name': 'Bulk Install App',
-        'category': 'apps',
-        'description': 'Install application on multiple devices',
-        'script': 'bulk_install_application',
-        'parameters': [
-            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
-            {'name': 'manifest_url', 'label': 'Manifest URL', 'type': 'string', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': False,
-    },
 
     # =========================================================================
-    # DEVICE CONTROL
+    # DEVICE CONTROL (Consolidated)
     # =========================================================================
-    'lock_device': {
-        'name': 'Lock Device',
+    'device_action': {
+        'name': 'Device Action',
         'category': 'device_control',
-        'description': 'Lock device immediately',
-        'script': 'lock_device',
+        'description': 'Perform actions on device: Lock, Unlock, Restart, Erase, Clear Passcode',
+        'script': '_internal_device_action',
         'parameters': [
+            {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
+             'options': [
+                 {'value': 'lock', 'label': 'Lock Device'},
+                 {'value': 'unlock', 'label': 'Unlock Device (Clear Passcode)'},
+                 {'value': 'restart', 'label': 'Restart Device'},
+                 {'value': 'erase', 'label': 'Erase Device (Factory Reset)'},
+                 {'value': 'clear_passcode', 'label': 'Clear Passcode'},
+             ]},
             {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-            {'name': 'pin', 'label': 'PIN Code', 'type': 'string', 'required': False,
+            {'name': 'pin', 'label': 'PIN Code (for Lock/Erase)', 'type': 'string', 'required': False,
              'placeholder': '123456'},
             {'name': 'message', 'label': 'Lock Message', 'type': 'string', 'required': False,
              'placeholder': 'Device locked by administrator'},
+            {'name': 'confirm_erase', 'label': 'Type ERASE to confirm (required for Erase action)', 'type': 'string', 'required': False,
+             'placeholder': 'Type ERASE to confirm'},
         ],
         'dangerous': True,
-        'danger_level': 'medium',
+        'danger_level': 'high',
         'min_role': 'operator',
         'bulk_supported': False,
+        'info_text': 'Perform device control actions. Erase requires admin role, typing "ERASE" to confirm, and will PERMANENTLY delete all data.',
     },
-    'unlock_device': {
-        'name': 'Unlock Device (Clear Passcode)',
+
+    'update_inventory': {
+        'name': 'Update Inventory',
         'category': 'device_control',
-        'description': 'Clear passcode using ClearPasscode MDM command with UnlockToken (supervised iOS devices)',
-        'script': 'unlock_device',
+        'description': 'Update device inventory (hardware, security, profiles, apps) and cache in database',
+        'script': '_internal_update_inventory',
         'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
+            {'name': 'os_filter', 'label': 'OS Filter', 'type': 'select', 'required': False,
+             'options': [
+                 {'value': '', 'label': '-- All --'},
+                 {'value': 'macOS', 'label': 'macOS only'},
+                 {'value': 'iOS', 'label': 'iOS only'},
+             ]},
+            {'name': 'manifest', 'label': 'Manifest', 'type': 'select', 'required': False,
+             'options': '_DYNAMIC_MANIFESTS_ALL'},
+            {'name': 'last_updated', 'label': 'Last Updated', 'type': 'select', 'required': False,
+             'options': [
+                 {'value': '', 'label': '-- All --'},
+                 {'value': '24h', 'label': 'Not updated in 24h'},
+                 {'value': '7d', 'label': 'Not updated in 7 days'},
+                 {'value': 'never', 'label': 'Never updated'},
+             ]},
+            {'name': 'devices', 'label': 'Devices (optional - leave empty to use filters)', 'type': 'devices', 'required': False},
         ],
-        'dangerous': True,
-        'danger_level': 'medium',
+        'dangerous': False,
         'min_role': 'operator',
-        'bulk_supported': False,
-        'info_text': 'Sends ClearPasscode command with UnlockToken from database. Device must be supervised with UnlockToken escrow enabled.',
-    },
-    'restart_device': {
-        'name': 'Restart Device',
-        'category': 'device_control',
-        'description': 'Restart device remotely',
-        'script': 'restart_device',
-        'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-        ],
-        'dangerous': True,
-        'danger_level': 'low',
-        'min_role': 'operator',
-        'bulk_supported': False,
-    },
-    'erase_device': {
-        'name': 'Erase Device',
-        'category': 'device_control',
-        'description': 'Factory reset device - ALL DATA WILL BE PERMANENTLY LOST',
-        'script': 'erase_device',
-        'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-            {'name': 'pin', 'label': 'PIN Code', 'type': 'string', 'required': False,
-             'placeholder': '123456'},
-        ],
-        'dangerous': True,
-        'danger_level': 'critical',
-        'confirm_text': 'ERASE',
-        'min_role': 'admin',
-        'bulk_supported': False,
+        'bulk_supported': True,
+        'info_text': 'Query devices for inventory data and cache in database. Select specific devices OR use filters to update all matching devices.',
     },
 
     # =========================================================================
-    # OS UPDATES
+    # OS UPDATES (Consolidated)
     # =========================================================================
     'schedule_os_update': {
         'name': 'Schedule OS Update',
         'category': 'os_updates',
-        'description': 'Schedule OS update on device',
-        'script': 'schedule_os_update',
+        'description': 'Schedule OS update on one or more devices',
+        'script': '_internal_schedule_os_update',
         'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
             {'name': 'action', 'label': 'Install Action', 'type': 'select', 'required': True,
              'options': [
                  {'value': 'Default', 'label': 'Default'},
@@ -385,6 +285,7 @@ COMMANDS = {
                  {'value': 'InstallLater', 'label': 'Install Later'},
                  {'value': 'InstallForceRestart', 'label': 'Install & Force Restart'},
              ]},
+            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
             {'name': 'key', 'label': 'Product Key', 'type': 'string', 'required': False,
              'placeholder': 'Specific update product key'},
             {'name': 'version', 'label': 'Version', 'type': 'string', 'required': False,
@@ -401,7 +302,8 @@ COMMANDS = {
         'dangerous': True,
         'danger_level': 'medium',
         'min_role': 'operator',
-        'bulk_supported': True,
+        'bulk_supported': False,
+        'info_text': 'Schedule OS update on selected devices. Select one or multiple devices.',
     },
     'available_os_updates': {
         'name': 'Available OS Updates',
@@ -427,109 +329,29 @@ COMMANDS = {
         'min_role': 'report',
         'bulk_supported': False,
     },
-    'bulk_schedule_os_update': {
-        'name': 'Bulk OS Update',
-        'category': 'os_updates',
-        'description': 'Schedule OS update on multiple devices (platform-specific options)',
-        'script': 'bulk_schedule_os_update',
-        'parameters': [
-            {'name': 'action', 'label': 'Install Action', 'type': 'select', 'required': True,
-             'options': [
-                 {'value': 'Default', 'label': 'Default'},
-                 {'value': 'DownloadOnly', 'label': 'Download Only'},
-                 {'value': 'InstallASAP', 'label': 'Install ASAP'},
-                 {'value': 'NotifyOnly', 'label': 'Notify Only'},
-                 {'value': 'InstallLater', 'label': 'Install Later'},
-                 {'value': 'InstallForceRestart', 'label': 'Install & Force Restart'},
-             ]},
-            {'name': 'devices', 'label': 'Select Devices (empty = all matching filters)', 'type': 'devices', 'required': False},
-            {'name': 'manifest', 'label': 'Filter by Manifest', 'type': 'select', 'required': False,
-             'options': '_DYNAMIC_MANIFESTS_ALL'},
-            {'name': 'account_filter', 'label': 'Filter by Account', 'type': 'select', 'required': False,
-             'options': '_DYNAMIC_ACCOUNTS_ALL'},
-            {'name': 'os_filter', 'label': 'Filter by OS', 'type': 'select', 'required': False,
-             'options': '_DYNAMIC_OS_FILTER'},
-            {'name': 'ios_key', 'label': 'iOS Product Key', 'type': 'string', 'required': False,
-             'placeholder': 'e.g. iOS17.1'},
-            {'name': 'ios_version', 'label': 'iOS Version', 'type': 'string', 'required': False,
-             'placeholder': 'e.g. 17.1'},
-            {'name': 'ios_deferrals', 'label': 'iOS Max Deferrals', 'type': 'string', 'required': False,
-             'placeholder': 'e.g. 3'},
-            {'name': 'ios_priority', 'label': 'iOS Priority', 'type': 'select', 'required': False,
-             'options': [
-                 {'value': '', 'label': '-- Default --'},
-                 {'value': 'Low', 'label': 'Low'},
-                 {'value': 'High', 'label': 'High'},
-             ]},
-            {'name': 'macos_key', 'label': 'macOS Product Key', 'type': 'string', 'required': False,
-             'placeholder': 'e.g. macOS14.1'},
-            {'name': 'macos_version', 'label': 'macOS Version', 'type': 'string', 'required': False,
-             'placeholder': 'e.g. 14.1'},
-            {'name': 'macos_deferrals', 'label': 'macOS Max Deferrals', 'type': 'string', 'required': False,
-             'placeholder': 'e.g. 3'},
-            {'name': 'macos_priority', 'label': 'macOS Priority', 'type': 'select', 'required': False,
-             'options': [
-                 {'value': '', 'label': '-- Default --'},
-                 {'value': 'Low', 'label': 'Low'},
-                 {'value': 'High', 'label': 'High'},
-             ]},
-            {'name': 'dry_run', 'label': 'Dry Run (preview only)', 'type': 'checkbox', 'required': False},
-        ],
-        'dangerous': True,
-        'danger_level': 'medium',
-        'min_role': 'operator',
-        'bulk_supported': False,
-    },
 
     # =========================================================================
-    # REMOTE DESKTOP
+    # REMOTE DESKTOP (Consolidated)
     # =========================================================================
-    'enable_rd': {
-        'name': 'Enable Remote Desktop',
+    'manage_remote_desktop': {
+        'name': 'Manage Remote Desktop',
         'category': 'remote_desktop',
-        'description': 'Enable remote desktop access on device',
-        'script': 'enable_rd',
-        'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-        ],
-        'dangerous': True,
-        'danger_level': 'medium',
-        'min_role': 'operator',
-        'bulk_supported': False,
-    },
-    'disable_rd': {
-        'name': 'Disable Remote Desktop',
-        'category': 'remote_desktop',
-        'description': 'Disable remote desktop access on device',
-        'script': 'disable_rd',
-        'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': False,
-    },
-    'bulk_remote_desktop': {
-        'name': 'Bulk Remote Desktop',
-        'category': 'remote_desktop',
-        'description': 'Enable or disable Remote Desktop on selected macOS devices',
-        'script': '_internal_bulk_remote_desktop',
+        'description': 'Enable or disable Remote Desktop on one or more macOS devices',
+        'script': '_internal_manage_remote_desktop',
         'parameters': [
             {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
              'options': [
                  {'value': 'enable', 'label': 'Enable Remote Desktop'},
                  {'value': 'disable', 'label': 'Disable Remote Desktop'},
              ]},
-            {'name': 'devices', 'label': 'Select Devices (empty = all macOS matching filter)', 'type': 'devices', 'required': False,
+            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True,
              'filter_os': 'macos'},
-            {'name': 'manifest', 'label': 'Filter by Manifest', 'type': 'select', 'required': False,
-             'options': '_DYNAMIC_MANIFESTS_ALL'},
         ],
         'dangerous': True,
         'danger_level': 'medium',
         'min_role': 'operator',
         'bulk_supported': False,
-        'info_text': 'Select specific devices or leave empty to target ALL macOS devices matching the manifest filter. Commands are executed in parallel for fast execution.',
+        'info_text': 'Enable or disable Remote Desktop (ARD) on selected macOS devices. Select one or multiple devices.',
     },
 
     # =========================================================================
@@ -629,174 +451,6 @@ COMMANDS = {
         'min_role': 'report',
         'bulk_supported': False,
     },
-
-    # =========================================================================
-    # VPP APPS
-    # =========================================================================
-    'install_vpp_app': {
-        'name': 'Install VPP App',
-        'category': 'vpp',
-        'description': 'Install VPP application on device',
-        'script': 'install_vpp_app',
-        'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-            {'name': 'adam_id', 'label': 'Adam ID', 'type': 'string', 'required': True,
-             'placeholder': 'App Store Adam ID'},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': True,
-    },
-    'remove_vpp_app': {
-        'name': 'Remove VPP App',
-        'category': 'vpp',
-        'description': 'Remove VPP application from device',
-        'script': 'remove_vpp_app',
-        'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-            {'name': 'adam_id', 'label': 'Adam ID', 'type': 'string', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': True,
-    },
-    'get_vpp_application_version': {
-        'name': 'Get VPP App Version',
-        'category': 'vpp',
-        'description': 'Get VPP application version info',
-        'script': 'get_vpp_application_version',
-        'parameters': [
-            {'name': 'adam_id', 'label': 'Adam ID', 'type': 'string', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'report',
-        'bulk_supported': False,
-    },
-    'bulk_install_ios_vpp_apps': {
-        'name': 'Bulk Install iOS VPP Apps',
-        'category': 'vpp',
-        'description': 'Install VPP apps on multiple iOS devices',
-        'script': 'bulk_install_ios_vpp_apps',
-        'parameters': [
-            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
-            {'name': 'adam_id', 'label': 'Adam ID', 'type': 'string', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': False,
-    },
-    'bulk_install_macos_vpp_apps': {
-        'name': 'Bulk Install macOS VPP Apps',
-        'category': 'vpp',
-        'description': 'Install VPP apps on multiple macOS devices',
-        'script': 'bulk_install_macos_vpp_apps',
-        'parameters': [
-            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
-            {'name': 'adam_id', 'label': 'Adam ID', 'type': 'string', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': False,
-    },
-    'bulk_remove_ios_vpp_apps': {
-        'name': 'Bulk Remove iOS VPP Apps',
-        'category': 'vpp',
-        'description': 'Remove VPP apps from multiple iOS devices',
-        'script': 'bulk_remove_ios_vpp_apps',
-        'parameters': [
-            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
-            {'name': 'adam_id', 'label': 'Adam ID', 'type': 'string', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': False,
-    },
-    'bulk_remove_macos_vpp_apps': {
-        'name': 'Bulk Remove macOS VPP Apps',
-        'category': 'vpp',
-        'description': 'Remove VPP apps from multiple macOS devices',
-        'script': 'bulk_remove_macos_vpp_apps',
-        'parameters': [
-            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
-            {'name': 'adam_id', 'label': 'Adam ID', 'type': 'string', 'required': True},
-        ],
-        'dangerous': False,
-        'min_role': 'operator',
-        'bulk_supported': False,
-    },
-    'update_vpp_from_list': {
-        'name': 'Update VPP From List',
-        'category': 'vpp',
-        'description': 'Update VPP apps from predefined list',
-        'script': 'update_vpp_from_list',
-        'parameters': [],
-        'dangerous': False,
-        'min_role': 'admin',
-        'bulk_supported': False,
-    },
-
-    # =========================================================================
-    # OTHER
-    # =========================================================================
-    'gen_wireguard_mobileconfig': {
-        'name': 'Generate WireGuard Config',
-        'category': 'other',
-        'description': 'Generate WireGuard VPN mobileconfig profile',
-        'script': 'gen_wireguard_mobileconfig',
-        'parameters': [
-            {'name': 'name', 'label': 'Config Name', 'type': 'string', 'required': True,
-             'placeholder': 'vpn-user1'},
-        ],
-        'dangerous': False,
-        'min_role': 'admin',
-        'bulk_supported': False,
-    },
-    'clear_queue': {
-        'name': 'Clear Command Queue',
-        'category': 'other',
-        'description': 'Clear pending commands from device queue',
-        'script': 'clear_queue',
-        'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-        ],
-        'dangerous': True,
-        'danger_level': 'low',
-        'min_role': 'admin',
-        'bulk_supported': False,
-    },
-    'send_command': {
-        'name': 'Send HTTP Command',
-        'category': 'other',
-        'description': 'Send HTTP command to NanoHUB agent on device (test, hostname, shell, user management)',
-        'script': 'send_command',
-        'script_dir': '/opt/nanohub/tools/api/commands',
-        'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
-            {'name': 'command_type', 'label': 'Command Type', 'type': 'select', 'required': True,
-             'options': [
-                 {'value': 'test', 'label': 'Test - Test connectivity'},
-                 {'value': 'hostname', 'label': 'Hostname - Change computer name'},
-                 {'value': 'shell', 'label': 'Shell - Execute shell command'},
-                 {'value': 'createuser', 'label': 'Create User'},
-                 {'value': 'disableuser', 'label': 'Disable User'},
-                 {'value': 'enableuser', 'label': 'Enable User'},
-                 {'value': 'removeuser', 'label': 'Remove User'},
-                 {'value': 'setpassword', 'label': 'Set Password'},
-             ]},
-            {'name': 'value', 'label': 'Value', 'type': 'string', 'required': True,
-             'placeholder': 'Command value (e.g. new-hostname, username, shell command)'},
-            {'name': 'parameter', 'label': 'Parameter', 'type': 'string', 'required': False,
-             'placeholder': 'Optional: admin|password or standard|password for createuser'},
-        ],
-        'dangerous': True,
-        'danger_level': 'high',
-        'min_role': 'admin',
-        'bulk_supported': False,
-    },
-
-    # =========================================================================
-    # DATABASE TOOLS
-    # =========================================================================
     'db_device_query': {
         'name': 'Database Device Query',
         'category': 'diagnostics',
@@ -824,6 +478,39 @@ COMMANDS = {
         'min_role': 'report',
         'bulk_supported': False,
     },
+
+    # =========================================================================
+    # VPP APPS (Consolidated)
+    # =========================================================================
+    'manage_vpp_app': {
+        'name': 'Manage VPP App',
+        'category': 'vpp',
+        'description': 'Install or remove VPP application on one or more devices',
+        'script': '_internal_manage_vpp_app',
+        'parameters': [
+            {'name': 'platform', 'label': 'Platform', 'type': 'select', 'required': True,
+             'options': [
+                 {'value': 'ios', 'label': 'iOS'},
+                 {'value': 'macos', 'label': 'macOS'},
+             ]},
+            {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
+             'options': [
+                 {'value': 'install', 'label': 'Install'},
+                 {'value': 'remove', 'label': 'Remove'},
+             ]},
+            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
+            {'name': 'adam_id', 'label': 'Adam ID', 'type': 'string', 'required': True,
+             'placeholder': 'App Store Adam ID'},
+        ],
+        'dangerous': False,
+        'min_role': 'operator',
+        'bulk_supported': False,
+        'info_text': 'Install or remove VPP application. Select platform (iOS/macOS), action (Install/Remove), and one or multiple devices.',
+    },
+
+    # =========================================================================
+    # OTHER
+    # =========================================================================
     'device_manager': {
         'name': 'Device Manager',
         'category': 'setup',
@@ -855,6 +542,54 @@ COMMANDS = {
         ],
         'dangerous': False,
         'min_role': 'operator',
+        'bulk_supported': False,
+    },
+    'manage_command_queue': {
+        'name': 'Command Queue',
+        'category': 'other',
+        'description': 'Show or clear pending commands in device queue',
+        'script': '_internal_manage_command_queue',
+        'parameters': [
+            {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
+             'options': [
+                 {'value': 'show', 'label': 'Show Queue'},
+                 {'value': 'clear', 'label': 'Clear Queue'},
+             ]},
+            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
+        ],
+        'dangerous': True,
+        'danger_level': 'low',
+        'min_role': 'admin',
+        'bulk_supported': False,
+        'info_text': 'View or clear pending MDM commands in the device queue.',
+    },
+    'send_command': {
+        'name': 'Send Command',
+        'category': 'other',
+        'description': 'Send command to NanoHUB agent on device (test, hostname, shell, user management)',
+        'script': 'send_command',
+        'script_dir': '/opt/nanohub/tools/api/commands',
+        'parameters': [
+            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
+            {'name': 'command_type', 'label': 'Command Type', 'type': 'select', 'required': True,
+             'options': [
+                 {'value': 'test', 'label': 'Test - Test connectivity'},
+                 {'value': 'hostname', 'label': 'Hostname - Change computer name'},
+                 {'value': 'shell', 'label': 'Shell - Execute shell command'},
+                 {'value': 'createuser', 'label': 'Create User'},
+                 {'value': 'disableuser', 'label': 'Disable User'},
+                 {'value': 'enableuser', 'label': 'Enable User'},
+                 {'value': 'removeuser', 'label': 'Remove User'},
+                 {'value': 'setpassword', 'label': 'Set Password'},
+             ]},
+            {'name': 'value', 'label': 'Value', 'type': 'string', 'required': True,
+             'placeholder': 'Command value (e.g. new-hostname, username, shell command)'},
+            {'name': 'parameter', 'label': 'Parameter', 'type': 'string', 'required': False,
+             'placeholder': 'Optional: admin|password or standard|password for createuser'},
+        ],
+        'dangerous': True,
+        'danger_level': 'high',
+        'min_role': 'admin',
         'bulk_supported': False,
     },
 }
@@ -915,8 +650,8 @@ def get_available_profiles():
 
 def check_role_permission(user_role, required_role):
     """Check if user role meets minimum requirement"""
-    # restricted-admin has same permission level as admin, just filtered by manifest
-    role_hierarchy = {'admin': 3, 'restricted-admin': 3, 'operator': 2, 'report': 1}
+    # bel-admin has same permission level as admin, just filtered by manifest
+    role_hierarchy = {'admin': 3, 'bel-admin': 3, 'operator': 2, 'report': 1}
     return role_hierarchy.get(user_role, 0) >= role_hierarchy.get(required_role, 0)
 
 

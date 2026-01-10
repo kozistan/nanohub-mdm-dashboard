@@ -43,7 +43,7 @@ executor = ThreadPoolExecutor(max_workers=10)
 DB_CONFIG = {
     'host': '127.0.0.1',
     'user': 'nanohub',
-    'password': '1stSlotoSQLAccount.',
+    'password': 'YOUR_DATABASE_PASSWORD',
     'database': 'nanohub'
 }
 
@@ -109,6 +109,483 @@ def get_hostname_for_uuid(uuid_val):
     """Get hostname for a device UUID from database (backwards compatibility)"""
     info = get_device_info_for_uuid(uuid_val)
     return info.get('hostname')
+
+
+def get_device_detail(uuid_val):
+    """Get complete device info from device_inventory + enrollments for Device Detail page"""
+    try:
+        import mysql.connector
+        conn = mysql.connector.connect(
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database']
+        )
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT
+                di.uuid, di.serial, di.os, di.hostname, di.manifest,
+                di.account, di.dep, di.created_at, di.updated_at,
+                e.last_seen_at,
+                CASE
+                    WHEN e.last_seen_at IS NULL THEN 'offline'
+                    WHEN TIMESTAMPDIFF(MINUTE, e.last_seen_at, NOW()) <= 15 THEN 'online'
+                    WHEN TIMESTAMPDIFF(MINUTE, e.last_seen_at, NOW()) <= 60 THEN 'active'
+                    ELSE 'offline'
+                END as status
+            FROM device_inventory di
+            LEFT JOIN (
+                SELECT device_id, MAX(last_seen_at) as last_seen_at
+                FROM enrollments
+                GROUP BY device_id
+            ) e ON di.uuid = e.device_id
+            WHERE di.uuid = %s
+        """, (uuid_val,))
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return result
+    except Exception as e:
+        logger.error(f"Failed to get device detail for UUID {uuid_val}: {e}")
+        return None
+
+
+def get_device_command_history(uuid_val, limit=20):
+    """Get command history for a specific device"""
+    try:
+        import mysql.connector
+        conn = mysql.connector.connect(
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database']
+        )
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT id, timestamp, user, command_id, command_name,
+                   params, result_summary, success, execution_time_ms
+            FROM command_history
+            WHERE device_udid = %s
+            ORDER BY timestamp DESC
+            LIMIT %s
+        """, (uuid_val, limit))
+        results = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        # Parse params JSON
+        for entry in results:
+            if entry.get('params'):
+                try:
+                    entry['params'] = json.loads(entry['params'])
+                except:
+                    entry['params'] = {}
+        return results
+    except Exception as e:
+        logger.error(f"Failed to get command history for UUID {uuid_val}: {e}")
+        return []
+
+
+def save_device_details(uuid_val, query_type, data):
+    """Save MDM query results to device_details table"""
+    import mysql.connector
+    import json
+
+    column_map = {
+        'hardware': 'hardware_data',
+        'security': 'security_data',
+        'profiles': 'profiles_data',
+        'apps': 'apps_data'
+    }
+
+    if query_type not in column_map:
+        return False
+
+    data_column = column_map[query_type]
+    timestamp_column = f"{query_type}_updated_at"
+
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+
+        # Upsert - insert or update
+        sql = f"""
+            INSERT INTO device_details (uuid, {data_column}, {timestamp_column})
+            VALUES (%s, %s, NOW())
+            ON DUPLICATE KEY UPDATE
+                {data_column} = VALUES({data_column}),
+                {timestamp_column} = NOW()
+        """
+        cursor.execute(sql, (uuid_val, json.dumps(data)))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"Saved {query_type} data for device {uuid_val}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save device details: {e}")
+        return False
+
+
+def get_device_details(uuid_val, query_type=None):
+    """Get cached device details from database"""
+    import mysql.connector
+    import json
+
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT hardware_data, security_data, profiles_data, apps_data,
+                   hardware_updated_at, security_updated_at, profiles_updated_at, apps_updated_at
+            FROM device_details WHERE uuid = %s
+        """, (uuid_val,))
+
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if not row:
+            return None
+
+        # Parse JSON fields
+        result = {}
+        for field in ['hardware_data', 'security_data', 'profiles_data', 'apps_data']:
+            if row[field]:
+                try:
+                    result[field.replace('_data', '')] = json.loads(row[field]) if isinstance(row[field], str) else row[field]
+                except:
+                    result[field.replace('_data', '')] = row[field]
+            else:
+                result[field.replace('_data', '')] = None
+
+        # Add timestamps
+        result['hardware_updated_at'] = str(row['hardware_updated_at']) if row['hardware_updated_at'] else None
+        result['security_updated_at'] = str(row['security_updated_at']) if row['security_updated_at'] else None
+        result['profiles_updated_at'] = str(row['profiles_updated_at']) if row['profiles_updated_at'] else None
+        result['apps_updated_at'] = str(row['apps_updated_at']) if row['apps_updated_at'] else None
+
+        if query_type:
+            return {
+                'data': result.get(query_type),
+                'updated_at': result.get(f'{query_type}_updated_at')
+            }
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to get device details: {e}")
+        return None
+
+
+def execute_device_query(uuid_val, query_type):
+    """Execute MDM query command and poll webhook for JSON response"""
+    import re
+    import uuid
+    import time
+    import urllib.request
+    import urllib.error
+    import base64
+
+    WEBHOOK_LOG = '/var/log/nanohub/webhook.log'
+    MDM_API = 'http://localhost:9004/api/v1/nanomdm/enqueue'
+    MDM_PUSH_API = 'http://localhost:9004/api/v1/nanomdm/push'
+    MDM_USER = 'nanohub'
+    MDM_PASS = 'YOUR_MDM_API_KEY'
+
+    def send_push(device_uuid):
+        """Send APNs push notification to wake up device"""
+        try:
+            push_url = f'{MDM_PUSH_API}/{device_uuid}'
+            req = urllib.request.Request(push_url, method='POST')
+            auth_string = base64.b64encode(f'{MDM_USER}:{MDM_PASS}'.encode()).decode()
+            req.add_header('Authorization', f'Basic {auth_string}')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    logger.info(f"Push sent to {device_uuid}")
+                    return True
+        except Exception as e:
+            logger.warning(f"Failed to send push to {device_uuid}: {e}")
+        return False
+
+    # Define MDM command templates
+    query_configs = {
+        'hardware': {
+            'request_type': 'DeviceInformation',
+            'queries': [
+                'UDID', 'DeviceName', 'OSVersion', 'BuildVersion', 'ModelName',
+                'Model', 'ProductName', 'SerialNumber', 'DeviceCapacity',
+                'AvailableDeviceCapacity', 'BatteryLevel', 'CellularTechnology',
+                'IMEI', 'MEID', 'ModemFirmwareVersion', 'IsSupervised',
+                'IsDeviceLocatorServiceEnabled', 'IsActivationLockEnabled',
+                'IsDoNotDisturbInEffect', 'IsCloudBackupEnabled', 'OSUpdateSettings',
+                'LocalHostName', 'HostName', 'SystemIntegrityProtectionEnabled',
+                'IsMDMLostModeEnabled', 'WiFiMAC', 'BluetoothMAC', 'EthernetMAC'
+            ]
+        },
+        'security': {
+            'request_type': 'SecurityInfo',
+            'queries': None
+        },
+        'profiles': {
+            'request_type': 'ProfileList',
+            'queries': None
+        },
+        'apps': {
+            'request_type': 'InstalledApplicationList',
+            'queries': None
+        }
+    }
+
+    if query_type not in query_configs:
+        return {'success': False, 'error': f'Unknown query type: {query_type}'}
+
+    config = query_configs[query_type]
+    cmd_uuid = str(uuid.uuid4())
+
+    # Build plist command
+    if config['queries']:
+        queries_xml = '\n'.join(f'            <string>{q}</string>' for q in config['queries'])
+        plist = f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>{config['request_type']}</string>
+        <key>Queries</key>
+        <array>
+{queries_xml}
+        </array>
+    </dict>
+    <key>CommandUUID</key>
+    <string>{cmd_uuid}</string>
+</dict>
+</plist>'''
+    else:
+        plist = f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>{config['request_type']}</string>
+    </dict>
+    <key>CommandUUID</key>
+    <string>{cmd_uuid}</string>
+</dict>
+</plist>'''
+
+    try:
+        # Send push notification first to wake up the device
+        send_push(uuid_val)
+        time.sleep(1)  # Give device time to wake up
+
+        url = f'{MDM_API}/{uuid_val}'
+        auth_string = base64.b64encode(f'{MDM_USER}:{MDM_PASS}'.encode()).decode()
+
+        # Retry logic - try up to 3 times if device returns NotNow
+        max_retries = 3
+        for attempt in range(max_retries):
+            # Generate new command UUID for each attempt
+            if attempt > 0:
+                cmd_uuid = str(uuid.uuid4())
+                # Update plist with new UUID
+                if config['queries']:
+                    queries_xml = '\n'.join(f'            <string>{q}</string>' for q in config['queries'])
+                    plist = f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>{config['request_type']}</string>
+        <key>Queries</key>
+        <array>
+{queries_xml}
+        </array>
+    </dict>
+    <key>CommandUUID</key>
+    <string>{cmd_uuid}</string>
+</dict>
+</plist>'''
+                else:
+                    plist = f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>{config['request_type']}</string>
+    </dict>
+    <key>CommandUUID</key>
+    <string>{cmd_uuid}</string>
+</dict>
+</plist>'''
+                # Send another push before retry
+                logger.info(f"Retry {attempt + 1}/{max_retries} for {query_type} on {uuid_val}")
+                send_push(uuid_val)
+                time.sleep(2)
+
+            # Send command to MDM
+            logger.info(f"Sending {query_type} query to device {uuid_val}, cmd_uuid={cmd_uuid}, attempt={attempt + 1}")
+            req = urllib.request.Request(url, data=plist.encode('utf-8'), method='PUT')
+            req.add_header('Content-Type', 'application/xml')
+            req.add_header('Authorization', f'Basic {auth_string}')
+
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                response_body = resp.read().decode('utf-8')
+                logger.info(f"MDM API response: HTTP {resp.status}, body: {response_body[:200]}")
+                if resp.status != 200:
+                    return {'success': False, 'error': f'MDM API error: HTTP {resp.status}'}
+
+            # Poll webhook log for response (max 15 seconds per attempt)
+            got_notnow = False
+            for i in range(15):
+                time.sleep(1)
+                try:
+                    with open(WEBHOOK_LOG, 'r') as f:
+                        lines = f.readlines()
+
+                    # Find our command UUID in the log
+                    found_uuid = False
+                    capture_lines = []
+                    for line in lines:
+                        if f'command_uuid: {cmd_uuid}' in line:
+                            found_uuid = True
+                            capture_lines = []
+                            continue
+                        if found_uuid:
+                            capture_lines.append(line)
+                            # Stop at next MDM Event or after 100 lines
+                            if '=== MDM Event ===' in line or len(capture_lines) > 100:
+                                break
+
+                    if found_uuid and capture_lines:
+                        # Check for NotNow status (device busy/sleeping)
+                        for cap_line in capture_lines:
+                            if 'Status: NotNow' in cap_line:
+                                logger.info(f"Device {uuid_val} returned NotNow for {query_type}, attempt {attempt + 1}")
+                                got_notnow = True
+                                break
+
+                        if got_notnow:
+                            break  # Exit poll loop, will retry
+
+                        # Parse the captured lines into JSON
+                        result_data = parse_webhook_output(capture_lines, query_type)
+                        if result_data:
+                            # Save to database for caching
+                            save_device_details(uuid_val, query_type, result_data)
+                            return {
+                                'success': True,
+                                'data': result_data,
+                                'query_type': query_type,
+                                'command_uuid': cmd_uuid
+                            }
+                except Exception as e:
+                    logger.warning(f"Error reading webhook log: {e}")
+                    continue
+
+            # If we got NotNow, continue to next retry attempt
+            if got_notnow and attempt < max_retries - 1:
+                continue
+
+            # If no NotNow and no result, we timed out on this attempt
+            if not got_notnow:
+                break  # No point retrying if device didn't respond at all
+
+        # All retries exhausted
+        return {'success': False, 'error': 'Device not responding. It may be offline or sleeping.'}
+
+    except urllib.error.HTTPError as e:
+        logger.error(f"MDM API HTTP error for {uuid_val}: {e.code} {e.reason}")
+        return {'success': False, 'error': f'MDM API error: HTTP {e.code} - Device may not be enrolled'}
+    except urllib.error.URLError as e:
+        logger.error(f"MDM API URL error for {uuid_val}: {e}")
+        return {'success': False, 'error': f'MDM API error: {e}'}
+    except Exception as e:
+        logger.error(f"MDM query error for {uuid_val}: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def parse_webhook_output(lines, query_type):
+    """Parse webhook log lines into structured JSON data"""
+    import re
+    import ast
+
+    result = {}
+
+    if query_type in ['hardware', 'security']:
+        # Parse key: value pairs
+        for line in lines:
+            # Match lines like: 2026-01-10 17:22:13,848 [INFO]     ModelName: iPhone
+            match = re.search(r'\[INFO\]\s+(\w+):\s*(.+)$', line)
+            if match:
+                key = match.group(1).strip()
+                value = match.group(2).strip()
+                # Skip status/udid/topic lines
+                if key.lower() not in ['status', 'udid', 'topic', 'command_uuid']:
+                    # Try to parse dict-like values (e.g. {'IsUserEnrollment': False})
+                    if value.startswith('{') and value.endswith('}'):
+                        try:
+                            # Replace datetime.datetime(...) with string representation
+                            clean_value = re.sub(
+                                r'datetime\.datetime\((\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)',
+                                r'"\1-\2-\3 \4:\5:\6"',
+                                value
+                            )
+                            parsed = ast.literal_eval(clean_value)
+                            if isinstance(parsed, dict):
+                                result[key] = parsed
+                                continue
+                        except:
+                            pass
+                    # Convert boolean-like values
+                    if value.lower() in ['true', 'yes', '1']:
+                        result[key] = True
+                    elif value.lower() in ['false', 'no', '0']:
+                        result[key] = False
+                    else:
+                        result[key] = value
+
+    elif query_type == 'profiles':
+        # Parse profile list
+        profiles = []
+        for line in lines:
+            # Match: [0] com.identifier (Name) — Status
+            match = re.search(r'\[(\d+)\]\s+(\S+)\s+\(([^)]+)\)\s*[—-]?\s*(\w+)?', line)
+            if match:
+                profiles.append({
+                    'index': int(match.group(1)),
+                    'identifier': match.group(2),
+                    'name': match.group(3),
+                    'status': match.group(4) or 'Unknown'
+                })
+        logger.info(f"Parsed {len(profiles)} profiles from {len(lines)} lines")
+        result = {'profiles': profiles, 'count': len(profiles)}
+
+    elif query_type == 'apps':
+        # Parse application list
+        apps = []
+        for line in lines:
+            # Match: [0] AppName (com.bundle.id) v1.0
+            match = re.search(r'\[(\d+)\]\s+(.+?)\s+\(([^)]+)\)\s+v?([\d.]+)?', line)
+            if match:
+                apps.append({
+                    'index': int(match.group(1)),
+                    'name': match.group(2).strip(),
+                    'bundle_id': match.group(3),
+                    'version': match.group(4) or '-'
+                })
+        logger.info(f"Parsed {len(apps)} apps from {len(lines)} lines")
+        result = {'applications': apps, 'count': len(apps)}
+
+    return result
 
 
 def audit_log(user, action, command, params, result, success, execution_time_ms=None):
@@ -643,6 +1120,10 @@ def execute_command(cmd_id, params, user_info):
     # Device Action (lock/unlock/restart/erase/clear_passcode)
     elif cmd_id == 'device_action':
         return execute_device_action(params, user_info)
+
+    # Update Inventory (bulk inventory update)
+    elif cmd_id == 'update_inventory':
+        return execute_update_inventory(params, user_info)
 
     # Schedule OS Update (on one or more devices)
     elif cmd_id == 'schedule_os_update':
@@ -1755,10 +2236,17 @@ ADMIN_DASHBOARD_TEMPLATE = '''
             justify-content: space-between;
             align-items: center;
             margin-bottom: 15px;
+            position: relative;
         }
         .admin-header h2 {
             margin: 0;
             text-align: left;
+        }
+        .admin-header .nav-tabs {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            margin: 0;
         }
         .category-grid {
             display: grid;
@@ -1834,18 +2322,18 @@ ADMIN_DASHBOARD_TEMPLATE = '''
 
         <div class="panel">
             <div class="admin-header">
-                <div class="panel-title" style="margin:0;">Commands</div>
+                <h2>Commands</h2>
+                <div class="nav-tabs" style="margin:0;">
+                    <a href="/admin" class="btn active">Commands</a>
+                    <a href="/admin/devices" class="btn">Devices</a>
+                    <a href="/admin/vpp" class="btn">VPP</a>
+                    <a href="/admin/history" class="btn">History</a>
+                </div>
                 <div>
                     <span style="color:#4b5563;">{{ user.display_name }}</span>
                     <span class="role-badge">{{ user.role }}</span>
                     <a href="/" class="btn" style="margin-left:10px;">Dashboard</a>
                 </div>
-            </div>
-
-            <div class="nav-tabs">
-                <a href="/admin" class="btn active">Commands</a>
-                <a href="/admin/vpp" class="btn">VPP</a>
-                <a href="/admin/history" class="btn">History</a>
             </div>
 
             <div class="category-grid">
@@ -1890,6 +2378,10 @@ ADMIN_COMMAND_TEMPLATE = '''
             justify-content: space-between;
             align-items: center;
             margin-bottom: 15px;
+        }
+        .admin-header h2 {
+            margin: 0;
+            text-align: left;
         }
         .form-group {
             margin-bottom: 15px;
@@ -2017,7 +2509,7 @@ ADMIN_COMMAND_TEMPLATE = '''
 
         <div class="panel">
             <div class="admin-header">
-                <div class="panel-title" style="margin:0;">{{ command.description }}</div>
+                <h2>{{ command.description }}</h2>
                 <a href="/admin" class="btn">Back to Commands</a>
             </div>
 
@@ -2066,8 +2558,8 @@ ADMIN_COMMAND_TEMPLATE = '''
                         <input type="text" id="device-search" placeholder="Search hostname / serial / UUID" style="width:220px;">
                         <select id="os-filter" style="width:100px;margin-left:5px;">
                             <option value="all">All OS</option>
-                            <option value="ios">iOS</option>
-                            <option value="macos">macOS</option>
+                            <option value="iOS">iOS</option>
+                            <option value="macOS">macOS</option>
                         </select>
                         <button type="button" onclick="searchDevices()" class="btn" style="margin-left:5px;">Search</button>
                         <button type="button" onclick="showAllDevices()" class="btn" style="margin-left:5px;">Show All</button>
@@ -2253,7 +2745,7 @@ ADMIN_COMMAND_TEMPLATE = '''
                     <td><input type="checkbox" name="devices" value="${dev.uuid}" onclick="event.stopPropagation()"></td>
                     <td><span class="status-dot ${statusClass}"></span></td>
                     <td style="font-size:0.85em;">${dev.uuid || '-'}</td>
-                    <td>${dev.hostname || '-'}</td>
+                    <td>${dev.hostname || '-'} <a href="/admin/device/${dev.uuid}" onclick="event.stopPropagation()" title="View device details" style="margin-left:5px;font-size:0.8em;color:#6b7280;">&#8599;</a></td>
                     <td>${dev.serial || '-'}</td>
                     <td>${dev.os || '-'}</td>
                     <td>${dev.account || '-'}</td>
@@ -2264,7 +2756,7 @@ ADMIN_COMMAND_TEMPLATE = '''
                 html += `<tr onclick="selectDevice('${dev.uuid}', '${dev.hostname || dev.serial}', this)">
                     <td><span class="status-dot ${statusClass}"></span></td>
                     <td style="font-size:0.85em;">${dev.uuid || '-'}</td>
-                    <td>${dev.hostname || '-'}</td>
+                    <td>${dev.hostname || '-'} <a href="/admin/device/${dev.uuid}" onclick="event.stopPropagation()" title="View device details" style="margin-left:5px;font-size:0.8em;color:#6b7280;">&#8599;</a></td>
                     <td>${dev.serial || '-'}</td>
                     <td>${dev.os || '-'}</td>
                     <td>${dev.account || '-'}</td>
@@ -2589,8 +3081,18 @@ ADMIN_HISTORY_TEMPLATE = '''
             justify-content: space-between;
             align-items: center;
             margin-bottom: 15px;
+            position: relative;
         }
-        .nav-tabs { margin-bottom: 15px; }
+        .admin-header h2 {
+            margin: 0;
+            text-align: left;
+        }
+        .admin-header .nav-tabs {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            margin: 0;
+        }
         .nav-tabs a { margin-right: 8px; }
         .nav-tabs a.active { background: #e89898; color: white; }
         .status-success { color: #27ae60; font-weight: bold; }
@@ -2664,14 +3166,18 @@ ADMIN_HISTORY_TEMPLATE = '''
 
         <div class="panel">
             <div class="admin-header">
-                <div class="panel-title" style="margin:0;">Command History (90 days)</div>
-                <a href="/admin" class="btn">Back to Commands</a>
-            </div>
-
-            <div class="nav-tabs">
-                <a href="/admin" class="btn">Commands</a>
-                <a href="/admin/vpp" class="btn">VPP</a>
-                <a href="/admin/history" class="btn active">History</a>
+                <h2>History</h2>
+                <div class="nav-tabs" style="margin:0;">
+                    <a href="/admin" class="btn">Commands</a>
+                    <a href="/admin/devices" class="btn">Devices</a>
+                    <a href="/admin/vpp" class="btn">VPP</a>
+                    <a href="/admin/history" class="btn active">History</a>
+                </div>
+                <div>
+                    <span style="color:#4b5563;">{{ user.display_name }}</span>
+                    <span class="role-badge">{{ user.role }}</span>
+                    <a href="/" class="btn" style="margin-left:10px;">Dashboard</a>
+                </div>
             </div>
 
             <form method="GET" class="filter-form">
@@ -2810,9 +3316,10 @@ ADMIN_PROFILES_TEMPLATE = '''
             align-items: center;
             margin-bottom: 15px;
         }
-        .nav-tabs { margin-bottom: 15px; }
-        .nav-tabs a { margin-right: 8px; }
-        .nav-tabs a.active { background: #e89898; color: white; }
+        .admin-header h2 {
+            margin: 0;
+            text-align: left;
+        }
         .profile-section {
             margin-bottom: 25px;
             text-align: left;
@@ -2855,14 +3362,8 @@ ADMIN_PROFILES_TEMPLATE = '''
 
         <div class="panel">
             <div class="admin-header">
-                <div class="panel-title" style="margin:0;">Available Signed Profiles</div>
+                <h2>Available Signed Profiles</h2>
                 <a href="/admin" class="btn">Back to Commands</a>
-            </div>
-
-            <div class="nav-tabs">
-                <a href="/admin" class="btn">Commands</a>
-                <a href="/admin/vpp" class="btn">VPP</a>
-                <a href="/admin/history" class="btn">History</a>
             </div>
 
             <div class="profile-section">
@@ -2926,8 +3427,18 @@ ADMIN_VPP_TEMPLATE = '''
             justify-content: space-between;
             align-items: center;
             margin-bottom: 15px;
+            position: relative;
         }
-        .nav-tabs { margin-bottom: 15px; }
+        .admin-header h2 {
+            margin: 0;
+            text-align: left;
+        }
+        .admin-header .nav-tabs {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            margin: 0;
+        }
         .nav-tabs a { margin-right: 8px; }
         .nav-tabs a.active { background: #e89898; color: white; }
         .token-info {
@@ -3018,14 +3529,18 @@ ADMIN_VPP_TEMPLATE = '''
 
         <div class="panel">
             <div class="admin-header">
-                <div class="panel-title" style="margin:0;">Apple Business Manager - VPP Apps</div>
-                <a href="/admin" class="btn">Back to Commands</a>
-            </div>
-
-            <div class="nav-tabs">
-                <a href="/admin" class="btn">Commands</a>
-                <a href="/admin/vpp" class="btn active">VPP</a>
-                <a href="/admin/history" class="btn">History</a>
+                <h2>VPP</h2>
+                <div class="nav-tabs" style="margin:0;">
+                    <a href="/admin" class="btn">Commands</a>
+                    <a href="/admin/devices" class="btn">Devices</a>
+                    <a href="/admin/vpp" class="btn active">VPP</a>
+                    <a href="/admin/history" class="btn">History</a>
+                </div>
+                <div>
+                    <span style="color:#4b5563;">{{ user.display_name }}</span>
+                    <span class="role-badge">{{ user.role }}</span>
+                    <a href="/" class="btn" style="margin-left:10px;">Dashboard</a>
+                </div>
             </div>
 
             {% if error %}
@@ -3771,6 +4286,142 @@ def execute_device_action(params, user_info):
         return {'success': False, 'error': str(e)}
 
 
+def execute_update_inventory(params, user_info):
+    """Handle Update Inventory command (bulk inventory update for multiple devices)"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import time
+    import mysql.connector
+    from datetime import datetime, timedelta
+
+    selected_devices = normalize_devices_param(params.get('devices'))
+    os_filter = params.get('os_filter', '')
+    manifest_filter = params.get('manifest', '')
+    last_updated_filter = params.get('last_updated', '')
+    query_types = ['hardware', 'security', 'profiles', 'apps']
+
+    output_lines = []
+    output_lines.append("=" * 60)
+    output_lines.append("UPDATE INVENTORY")
+    output_lines.append("=" * 60)
+
+    # Get devices either from selection or from filters
+    if selected_devices and len(selected_devices) > 0:
+        devices = selected_devices
+        output_lines.append(f"Selected devices: {len(devices)}")
+    else:
+        # Query DB with filters
+        try:
+            conn = mysql.connector.connect(**DB_CONFIG)
+            cursor = conn.cursor()
+
+            # Build SQL with filters
+            sql = """
+                SELECT di.uuid, di.hostname
+                FROM device_inventory di
+                LEFT JOIN device_details dd ON di.uuid = dd.uuid
+                WHERE 1=1
+            """
+            sql_params = []
+
+            if os_filter:
+                sql += " AND di.os = %s"
+                sql_params.append(os_filter)
+                output_lines.append(f"OS filter: {os_filter}")
+
+            if manifest_filter:
+                sql += " AND di.manifest = %s"
+                sql_params.append(manifest_filter)
+                output_lines.append(f"Manifest filter: {manifest_filter}")
+
+            if last_updated_filter:
+                if last_updated_filter == 'never':
+                    sql += " AND dd.uuid IS NULL"
+                    output_lines.append("Filter: Never updated")
+                elif last_updated_filter == '24h':
+                    cutoff = datetime.now() - timedelta(hours=24)
+                    sql += " AND (dd.hardware_updated_at IS NULL OR dd.hardware_updated_at < %s)"
+                    sql_params.append(cutoff)
+                    output_lines.append("Filter: Not updated in 24h")
+                elif last_updated_filter == '7d':
+                    cutoff = datetime.now() - timedelta(days=7)
+                    sql += " AND (dd.hardware_updated_at IS NULL OR dd.hardware_updated_at < %s)"
+                    sql_params.append(cutoff)
+                    output_lines.append("Filter: Not updated in 7 days")
+
+            sql += " ORDER BY di.hostname"
+            cursor.execute(sql, sql_params)
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+
+            devices = [row[0] for row in rows]
+            output_lines.append(f"Found {len(devices)} device(s) matching filters")
+
+        except Exception as e:
+            return {'success': False, 'error': f'Database error: {str(e)}'}
+
+    if not devices:
+        return {'success': False, 'error': 'No devices found matching the filters'}
+
+    output_lines.append("")
+
+    # Track results per device
+    device_results = {}
+
+    def run_device_queries(device_uuid):
+        """Run all query types for a single device"""
+        results = {'uuid': device_uuid, 'queries': {}}
+        for qt in query_types:
+            result = execute_device_query(device_uuid, qt)
+            results['queries'][qt] = result.get('success', False)
+            # Small delay between queries to not overwhelm MDM
+            time.sleep(0.3)
+        return results
+
+    # Process devices with limited concurrency (MDM can't handle too many parallel requests)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {executor.submit(run_device_queries, udid): udid for udid in devices}
+        for future in as_completed(futures):
+            result = future.result()
+            device_uuid = result['uuid']
+            device_results[device_uuid] = result['queries']
+
+            # Build status line
+            successes = sum(1 for v in result['queries'].values() if v)
+            total = len(result['queries'])
+            status = "OK" if successes == total else f"{successes}/{total}"
+            output_lines.append(f"[{status}] {device_uuid[:8]}...")
+
+    # Summary
+    total_devices = len(devices)
+    full_success = sum(1 for r in device_results.values() if all(r.values()))
+    partial_success = sum(1 for r in device_results.values() if any(r.values()) and not all(r.values()))
+    failed = total_devices - full_success - partial_success
+
+    output_lines.append("")
+    output_lines.append("=" * 60)
+    output_lines.append(f"SUMMARY:")
+    output_lines.append(f"  Full success: {full_success} devices")
+    output_lines.append(f"  Partial: {partial_success} devices")
+    output_lines.append(f"  Failed: {failed} devices")
+    output_lines.append("=" * 60)
+
+    audit_log(
+        user=user_info.get('username'),
+        action='update_inventory',
+        command='update_inventory',
+        params={'devices': len(devices)},
+        result=f'{full_success} success, {partial_success} partial, {failed} failed',
+        success=failed == 0
+    )
+
+    return {
+        'success': failed == 0,
+        'output': '\n'.join(output_lines),
+        'details': device_results
+    }
+
+
 def execute_schedule_os_update(params, user_info):
     """Handle Schedule OS Update command (on one or more devices)"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -4139,6 +4790,871 @@ def execute_manage_vpp_app(params, user_info):
 
 
 # =============================================================================
+# DEVICE DETAIL TEMPLATE
+# =============================================================================
+
+DEVICE_DETAIL_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ device.hostname or device.uuid }} - Device Detail</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+    <link rel="shortcut icon" href="/static/favicon.ico">
+    <style>
+        .os-badge {
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .os-badge.macos { background: #5856d6; color: white; }
+        .os-badge.ios { background: #007aff; color: white; }
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-dot.online { background: #27ae60; }
+        .status-dot.active { background: #f39c12; }
+        .status-dot.offline { background: #95a5a6; }
+
+        .tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 0;
+        }
+        .tab-btn {
+            padding: 10px 20px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 0.95em;
+            color: #6b7280;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover { color: #21243b; }
+        .tab-btn.active {
+            color: #21243b;
+            border-bottom-color: #e89898;
+            font-weight: 600;
+        }
+        .tab-btn .badge {
+            background: #e5e7eb;
+            color: #374151;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.8em;
+            margin-left: 5px;
+        }
+        .tab-btn.active .badge { background: #e89898; color: white; }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 12px;
+        }
+        .info-card {
+            background: #f7f8fa;
+            padding: 12px;
+            border-radius: 8px;
+            overflow: hidden;
+            text-align: left;
+        }
+        .info-card.wide {
+            grid-column: span 2;
+        }
+        .info-card.full-width {
+            grid-column: 1 / -1;
+        }
+        .info-card.wide .value,
+        .info-card.full-width .value {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 0 20px;
+        }
+        .info-card label {
+            display: block;
+            font-size: 0.8em;
+            color: #6b7280;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .info-card .value {
+            font-size: 0.95em;
+            font-weight: 500;
+            color: #21243b;
+            word-break: break-word;
+            overflow-wrap: break-word;
+        }
+        .info-card .nested-item {
+            display: flex;
+            padding: 3px 0;
+            gap: 8px;
+            font-size: 0.85em;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .info-card .nested-item:last-child {
+            border-bottom: none;
+        }
+        .info-card .nested-item .nested-key {
+            color: #6b7280;
+            min-width: 240px;
+            flex-shrink: 0;
+        }
+        .info-card .nested-item .nested-val {
+            color: #21243b;
+            word-break: break-all;
+        }
+
+        .security-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+        .security-badge.ok { background: #d1fae5; color: #065f46; }
+        .security-badge.warn { background: #fef3c7; color: #92400e; }
+        .security-badge.bad { background: #fee2e2; color: #991b1b; }
+
+        .quick-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e7eb;
+        }
+        .quick-actions .btn { min-width: 100px; }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #e5e7eb;
+            border-top-color: #21243b;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .refresh-btn {
+            float: right;
+            padding: 5px 12px;
+            font-size: 0.85em;
+        }
+
+        .output-box {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 0.85em;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .history-table { width: 100%; border-collapse: collapse; }
+        .history-table th { text-align: left; background: #f3f4f6; }
+        .history-table td, .history-table th { padding: 8px 12px; border-bottom: 1px solid #e5e7eb; }
+        .status-success { color: #059669; }
+        .status-failed { color: #dc2626; }
+
+        .error-box {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #991b1b;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .admin-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .admin-header h2 {
+            margin: 0;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <div id="wrap">
+        <div style="display: flex; justify-content: center; align-items: center;">
+            <img id="logo" src="/static/logo.svg" alt="Logo"/>
+        </div>
+        <h1>Device Detail</h1>
+
+        <div class="panel">
+            <div class="admin-header">
+                <h2>
+                    <span class="status-dot {{ device.status }}"></span>
+                    {{ device.hostname or 'Unknown' }}
+                    <span class="os-badge {{ device.os }}">{{ device.os }}</span>
+                </h2>
+                <a href="/admin/devices" class="btn">Back to Devices</a>
+            </div>
+
+            <div class="tabs">
+                <button class="tab-btn active" onclick="showTab('info')">Info</button>
+                <button class="tab-btn" onclick="showTab('hardware')" id="tab-hardware">Hardware</button>
+                <button class="tab-btn" onclick="showTab('security')" id="tab-security">Security</button>
+                <button class="tab-btn" onclick="showTab('profiles')" id="tab-profiles">Profiles <span class="badge" id="profiles-count">-</span></button>
+                <button class="tab-btn" onclick="showTab('apps')" id="tab-apps">Apps <span class="badge" id="apps-count">-</span></button>
+                <button class="tab-btn" onclick="showTab('history')">History <span class="badge">{{ history|length }}</span></button>
+            </div>
+
+            <!-- Info Tab -->
+            <div id="tab-content-info" class="tab-content active">
+                <div class="info-grid">
+                    <div class="info-card">
+                        <label>UUID</label>
+                        <div class="value" style="font-size:0.9em; font-family:monospace;">{{ device.uuid }}</div>
+                    </div>
+                    <div class="info-card">
+                        <label>Serial Number</label>
+                        <div class="value">{{ device.serial or '-' }}</div>
+                    </div>
+                    <div class="info-card">
+                        <label>Hostname</label>
+                        <div class="value">{{ device.hostname or '-' }}</div>
+                    </div>
+                    <div class="info-card">
+                        <label>Operating System</label>
+                        <div class="value">{{ device.os | upper }}</div>
+                    </div>
+                    <div class="info-card">
+                        <label>Manifest</label>
+                        <div class="value">{{ device.manifest or 'default' }}</div>
+                    </div>
+                    <div class="info-card">
+                        <label>DEP Enrolled</label>
+                        <div class="value">{{ 'Yes' if device.dep in ['1', 'enabled', True] else 'No' }}</div>
+                    </div>
+                    <div class="info-card">
+                        <label>Status</label>
+                        <div class="value">
+                            <span class="status-dot {{ device.status }}"></span>
+                            {{ device.status | capitalize }}
+                        </div>
+                    </div>
+                    <div class="info-card">
+                        <label>Last Seen</label>
+                        <div class="value">{{ device.last_seen_at or 'Never' }}</div>
+                    </div>
+                </div>
+
+                <div class="quick-actions">
+                    <button class="btn" onclick="executeAction('lock_device')">Lock</button>
+                    <button class="btn" onclick="executeAction('restart_device')">Restart</button>
+                    <button class="btn red" onclick="showEraseModal()" style="margin-left:auto;">Erase Device</button>
+                </div>
+            </div>
+
+            <!-- Erase Confirmation Modal -->
+            <div id="erase-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
+                <div style="background:white;padding:30px;border-radius:12px;max-width:450px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+                    <h2 style="margin:0 0 15px 0;color:#dc2626;">Erase Device</h2>
+                    <p style="color:#4b5563;margin-bottom:20px;">
+                        <strong>WARNING:</strong> This will permanently erase ALL DATA on the device. This action cannot be undone!
+                    </p>
+                    <p style="color:#4b5563;margin-bottom:10px;">
+                        Device: <strong>{{ device.hostname }}</strong> ({{ device.serial }})
+                    </p>
+                    <p style="color:#6b7280;margin-bottom:15px;">
+                        To confirm, type <strong style="color:#dc2626;">ERASE</strong> below:
+                    </p>
+                    <input type="text" id="erase-confirm-input" placeholder="Type ERASE to confirm"
+                           style="width:100%;padding:12px;border:2px solid #d1d5db;border-radius:6px;font-size:16px;margin-bottom:20px;box-sizing:border-box;"
+                           oninput="checkEraseInput()">
+                    <div style="display:flex;gap:10px;justify-content:flex-end;">
+                        <button class="btn" onclick="hideEraseModal()">Cancel</button>
+                        <button class="btn red" id="erase-confirm-btn" onclick="confirmErase()" disabled
+                                style="opacity:0.5;cursor:not-allowed;">Erase Device</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hardware Tab -->
+            <div id="tab-content-hardware" class="tab-content">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+                    <div>
+                        <h3 style="margin:0;display:inline;">Hardware Information</h3>
+                        <span id="hardware-timestamp" style="margin-left:15px;"></span>
+                    </div>
+                    <button class="btn" onclick="refreshData('hardware')">Refresh from Device</button>
+                </div>
+                <div id="hardware-loading" style="display:none;"><span class="loading-spinner"></span> Querying device...</div>
+                <div id="hardware-content" class="info-grid"></div>
+            </div>
+
+            <!-- Security Tab -->
+            <div id="tab-content-security" class="tab-content">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+                    <div>
+                        <h3 style="margin:0;display:inline;">Security Information</h3>
+                        <span id="security-timestamp" style="margin-left:15px;"></span>
+                    </div>
+                    <button class="btn" onclick="refreshData('security')">Refresh from Device</button>
+                </div>
+                <div id="security-loading" style="display:none;"><span class="loading-spinner"></span> Querying device...</div>
+                <div id="security-content" class="info-grid"></div>
+            </div>
+
+            <!-- Profiles Tab -->
+            <div id="tab-content-profiles" class="tab-content">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+                    <div>
+                        <h3 style="margin:0;display:inline;">Installed Profiles</h3>
+                        <span id="profiles-timestamp" style="margin-left:15px;"></span>
+                    </div>
+                    <button class="btn" onclick="refreshData('profiles')">Refresh from Device</button>
+                </div>
+                <div id="profiles-loading" style="display:none;"><span class="loading-spinner"></span> Querying device...</div>
+                <div id="profiles-content"></div>
+            </div>
+
+            <!-- Apps Tab -->
+            <div id="tab-content-apps" class="tab-content">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+                    <div>
+                        <h3 style="margin:0;display:inline;">Installed Applications</h3>
+                        <span id="apps-timestamp" style="margin-left:15px;"></span>
+                    </div>
+                    <button class="btn" onclick="refreshData('apps')">Refresh from Device</button>
+                </div>
+                <div id="apps-loading" style="display:none;"><span class="loading-spinner"></span> Querying device...</div>
+                <div id="apps-content"></div>
+            </div>
+
+            <!-- History Tab -->
+            <div id="tab-content-history" class="tab-content">
+                <h3>Command History</h3>
+                {% if history %}
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>User</th>
+                            <th>Command</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in history %}
+                        <tr>
+                            <td>{{ entry.timestamp }}</td>
+                            <td>{{ entry.user }}</td>
+                            <td>{{ entry.command_name }}</td>
+                            <td class="{{ 'status-success' if entry.success else 'status-failed' }}">
+                                {{ 'Success' if entry.success else 'Failed' }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <div style="margin-top:15px;">
+                    <a href="/admin/history?device={{ device.uuid }}" class="btn">View Full History</a>
+                </div>
+                {% else %}
+                <p>No command history for this device.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const deviceUuid = '{{ device.uuid }}';
+
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById('tab-content-' + tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        function loadData(type, forceRefresh = false) {
+            const loadingEl = document.getElementById(type + '-loading');
+            const contentEl = document.getElementById(type + '-content');
+            const timestampEl = document.getElementById(type + '-timestamp');
+
+            loadingEl.style.display = 'block';
+            if (forceRefresh) contentEl.innerHTML = '';
+
+            fetch('/admin/api/device/' + deviceUuid + '/query', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({query_type: type, force_refresh: forceRefresh})
+            })
+            .then(r => r.json())
+            .then(data => {
+                loadingEl.style.display = 'none';
+                if (data.success && data.data) {
+                    renderData(type, data.data, contentEl);
+                    // Show timestamp
+                    if (timestampEl) {
+                        if (data.cached && data.updated_at) {
+                            timestampEl.innerHTML = '<span style="color:#6b7280;font-size:0.85em;">Cached: ' + data.updated_at + '</span>';
+                        } else if (!data.cached) {
+                            timestampEl.innerHTML = '<span style="color:#27ae60;font-size:0.85em;">Updated just now</span>';
+                        }
+                    }
+                } else {
+                    contentEl.innerHTML = '<div class="error-box">' + (data.error || 'No data received') + '</div>';
+                    if (timestampEl) timestampEl.innerHTML = '';
+                }
+            })
+            .catch(err => {
+                loadingEl.style.display = 'none';
+                contentEl.innerHTML = '<div class="error-box">Error: ' + err.message + '</div>';
+            });
+        }
+
+        function refreshData(type) {
+            loadData(type, true);  // Force refresh from MDM
+        }
+
+        function renderData(type, data, container) {
+            if (type === 'hardware' || type === 'security') {
+                // Render key-value pairs as info cards
+                let html = '';
+                for (const [key, value] of Object.entries(data)) {
+                    let displayVal;
+                    let cardClass = 'info-card';
+
+                    if (typeof value === 'boolean') {
+                        displayVal = value ? '<span style="color:#27ae60">Yes</span>' : '<span style="color:#dc2626">No</span>';
+                    } else if (Array.isArray(value)) {
+                        displayVal = value.length + ' items';
+                        if (value.length > 5) cardClass += ' wide';
+                    } else if (typeof value === 'object' && value !== null) {
+                        // Handle nested objects - display as nice list
+                        const entries = Object.entries(value);
+                        const parts = [];
+                        for (const [k, v] of entries) {
+                            if (typeof v === 'boolean') {
+                                parts.push('<div class="nested-item"><span class="nested-key">' + formatKey(k) + '</span><span class="nested-val">' + (v ? '<span style="color:#27ae60">Yes</span>' : '<span style="color:#dc2626">No</span>') + '</span></div>');
+                            } else if (typeof v !== 'object') {
+                                let displayV = String(v);
+                                if (displayV.length > 60) {
+                                    displayV = '<span title="' + displayV.replace(/"/g, '&quot;') + '">' + displayV.substring(0, 57) + '...</span>';
+                                }
+                                parts.push('<div class="nested-item"><span class="nested-key">' + formatKey(k) + '</span><span class="nested-val">' + displayV + '</span></div>');
+                            }
+                        }
+                        displayVal = parts.length > 0 ? parts.join('') : '-';
+                        // Dynamic sizing based on content
+                        if (entries.length >= 3) {
+                            cardClass += ' wide';
+                        }
+                    } else {
+                        displayVal = value || '-';
+                        // Wide card for long text values
+                        if (String(value).length > 30) cardClass += ' wide';
+                    }
+                    html += `<div class="${cardClass}"><label>${formatKey(key)}</label><div class="value">${displayVal}</div></div>`;
+                }
+                container.innerHTML = html || '<div class="error-box">No data available</div>';
+
+            } else if (type === 'profiles') {
+                const profiles = data.profiles || [];
+                document.getElementById('profiles-count').textContent = profiles.length;
+
+                if (profiles.length === 0) {
+                    container.innerHTML = '<div class="error-box">No profiles installed</div>';
+                    return;
+                }
+
+                let html = '<table class="history-table"><thead><tr><th>#</th><th>Name</th><th>Identifier</th><th>Status</th></tr></thead><tbody>';
+                profiles.forEach((p, i) => {
+                    html += `<tr><td>${i + 1}</td><td>${p.name}</td><td style="font-size:0.85em;color:#6b7280;">${p.identifier}</td><td>${p.status}</td></tr>`;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+
+            } else if (type === 'apps') {
+                const allApps = data.applications || [];
+                const thirdPartyApps = allApps.filter(a => a.bundle_id && !a.bundle_id.startsWith('com.apple.'));
+                document.getElementById('apps-count').textContent = allApps.length;
+
+                if (allApps.length === 0) {
+                    container.innerHTML = '<div class="error-box">No applications found</div>';
+                    return;
+                }
+
+                let html = '<div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;">';
+                html += '<input type="text" id="apps-search" placeholder="Search apps..." onkeyup="filterApps()" style="padding:8px;width:300px;border:1px solid #d1d5db;border-radius:5px;">';
+                html += '<label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="hide-system" onchange="filterApps()"> Hide system apps (com.apple.*)</label>';
+                html += '<span style="color:#6b7280;font-size:0.9em;">Total: ' + allApps.length + ' | Third-party: ' + thirdPartyApps.length + '</span>';
+                html += '</div>';
+                html += '<table class="history-table" id="apps-table"><thead><tr><th>#</th><th>Name</th><th>Bundle ID</th><th>Version</th></tr></thead><tbody>';
+                allApps.forEach((a, i) => {
+                    const isSystem = a.bundle_id && a.bundle_id.startsWith('com.apple.');
+                    html += `<tr data-system="${isSystem}"><td>${i + 1}</td><td>${a.name}</td><td style="font-size:0.85em;color:#6b7280;">${a.bundle_id}</td><td>${a.version}</td></tr>`;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            }
+        }
+
+        function formatKey(key) {
+            // Handle common acronyms
+            let result = key
+                .replace(/([a-z])([A-Z])/g, '$1 $2')  // camelCase to spaces
+                .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')  // Handle consecutive caps
+                .replace(/^./, s => s.toUpperCase());
+            // Fix known acronyms
+            result = result.replace(/O S /g, 'OS ').replace(/I D/g, 'ID').replace(/M A C/g, 'MAC')
+                          .replace(/D E P/g, 'DEP').replace(/S I P/g, 'SIP').replace(/U R L/g, 'URL');
+            return result.trim();
+        }
+
+        function filterApps() {
+            const search = document.getElementById('apps-search').value.toLowerCase();
+            const hideSystem = document.getElementById('hide-system')?.checked || false;
+            const rows = document.querySelectorAll('#apps-table tbody tr');
+            rows.forEach(row => {
+                const text = row.textContent.toLowerCase();
+                const isSystem = row.dataset.system === 'true';
+                const matchesSearch = text.includes(search);
+                const showRow = matchesSearch && !(hideSystem && isSystem);
+                row.style.display = showRow ? '' : 'none';
+            });
+        }
+
+        function showEraseModal() {
+            document.getElementById('erase-modal').style.display = 'flex';
+            document.getElementById('erase-confirm-input').value = '';
+            document.getElementById('erase-confirm-btn').disabled = true;
+            document.getElementById('erase-confirm-btn').style.opacity = '0.5';
+            document.getElementById('erase-confirm-btn').style.cursor = 'not-allowed';
+        }
+
+        function hideEraseModal() {
+            document.getElementById('erase-modal').style.display = 'none';
+        }
+
+        function checkEraseInput() {
+            const input = document.getElementById('erase-confirm-input').value;
+            const btn = document.getElementById('erase-confirm-btn');
+            if (input === 'ERASE') {
+                btn.disabled = false;
+                btn.style.opacity = '1';
+                btn.style.cursor = 'pointer';
+            } else {
+                btn.disabled = true;
+                btn.style.opacity = '0.5';
+                btn.style.cursor = 'not-allowed';
+            }
+        }
+
+        function confirmErase() {
+            hideEraseModal();
+            fetch('/admin/execute', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    command: 'device_action',
+                    params: {action: 'erase', udid: deviceUuid, confirm_erase: 'ERASE'}
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Erase command sent successfully. Device will be wiped.');
+                } else {
+                    alert('Error: ' + (data.error || data.output || 'Unknown error'));
+                }
+            })
+            .catch(err => alert('Error: ' + err.message));
+        }
+
+        function executeAction(action) {
+            // For system_report, use the query API to get full data
+            if (action === 'system_report') {
+                showTab('hardware');
+                document.querySelector('.tab-btn[onclick*="hardware"]').classList.add('active');
+                refreshData('hardware');
+                return;
+            }
+
+            fetch('/admin/execute', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({command: action, params: {udid: deviceUuid}})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Command sent successfully');
+                } else {
+                    alert('Error: ' + (data.error || data.output || 'Unknown error'));
+                }
+            })
+            .catch(err => alert('Error: ' + err.message));
+        }
+
+        // Auto-load data on page load
+        // Load cached data on page load (fast), user can click Refresh for live data
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(() => loadData('hardware'), 100);
+            setTimeout(() => loadData('security'), 200);
+            setTimeout(() => loadData('profiles'), 300);
+            setTimeout(() => loadData('apps'), 400);
+        });
+    </script>
+</body>
+</html>
+'''
+
+
+# =============================================================================
+# ADMIN DEVICES LIST TEMPLATE
+# =============================================================================
+
+ADMIN_DEVICES_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Devices - NanoHUB Admin</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+    <link rel="shortcut icon" href="/static/favicon.ico">
+    <style>
+        .admin-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            position: relative;
+        }
+        .admin-header h2 {
+            margin: 0;
+            text-align: left;
+        }
+        .admin-header .nav-tabs {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            margin: 0;
+        }
+        .nav-tabs a { margin-right: 8px; }
+        .nav-tabs a.active { background: #e89898; color: white; }
+        .search-bar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            align-items: center;
+        }
+        .search-bar input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 5px;
+        }
+        .search-bar select {
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 5px;
+            min-width: 120px;
+        }
+        .device-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+        .device-table th, .device-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .device-table th {
+            background: #f7f8fa;
+            font-weight: 600;
+        }
+        .device-table tr:hover {
+            background: #f0f4ff;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-dot.online { background: #27ae60; }
+        .status-dot.active { background: #f39c12; }
+        .status-dot.offline { background: #95a5a6; }
+        .device-count {
+            color: #6b7280;
+            margin-bottom: 10px;
+        }
+        .device-link {
+            color: #276beb;
+            text-decoration: none;
+        }
+        .device-link:hover {
+            text-decoration: underline;
+        }
+        .os-badge {
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+        .os-badge.macos { background: #5856d6; color: white; }
+        .os-badge.ios { background: #007aff; color: white; }
+    </style>
+</head>
+<body>
+    <div id="wrap">
+        <div style="display: flex; justify-content: center; align-items: center;">
+            <img id="logo" src="/static/logo.svg" alt="Logo"/>
+        </div>
+        <h1>Device Inventory</h1>
+
+        <div class="panel">
+            <div class="admin-header">
+                <h2>Devices <span class="device-count" id="device-count"></span></h2>
+                <div class="nav-tabs" style="margin:0;">
+                    <a href="/admin" class="btn">Commands</a>
+                    <a href="/admin/devices" class="btn active">Devices</a>
+                    <a href="/admin/vpp" class="btn">VPP</a>
+                    <a href="/admin/history" class="btn">History</a>
+                </div>
+                <div>
+                    <span style="color:#4b5563;">{{ user.display_name }}</span>
+                    <span class="role-badge">{{ user.role }}</span>
+                    <a href="/" class="btn" style="margin-left:10px;">Dashboard</a>
+                </div>
+            </div>
+
+            <div class="search-bar">
+                <input type="text" id="search-input" placeholder="Search by hostname, serial, UUID..." onkeyup="filterDevices()">
+                <select id="os-filter" onchange="filterDevices()">
+                    <option value="">All OS</option>
+                    <option value="macos">macOS</option>
+                    <option value="ios">iOS</option>
+                </select>
+                <select id="status-filter" onchange="filterDevices()">
+                    <option value="">All Status</option>
+                    <option value="online">Online</option>
+                    <option value="active">Active</option>
+                    <option value="offline">Offline</option>
+                </select>
+            </div>
+
+            <div class="device-table-container">
+                <table class="device-table">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Hostname</th>
+                            <th>Serial</th>
+                            <th>OS</th>
+                            <th>Manifest</th>
+                            <th>Account</th>
+                            <th>DEP</th>
+                            <th>Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody id="device-tbody">
+                        <tr><td colspan="8" style="text-align:center;color:#4b5563;">Loading devices...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allDevices = [];
+
+        async function loadDevices() {
+            try {
+                const response = await fetch('/admin/api/devices');
+                if (!response.ok) throw new Error('Failed to load devices');
+                allDevices = await response.json();
+                renderDevices(allDevices);
+                document.getElementById('device-count').textContent = allDevices.length + ' devices';
+            } catch (error) {
+                document.getElementById('device-tbody').innerHTML =
+                    '<tr><td colspan="8" style="text-align:center;color:#dc2626;">Error loading devices</td></tr>';
+            }
+        }
+
+        function filterDevices() {
+            const search = document.getElementById('search-input').value.toLowerCase();
+            const osFilter = document.getElementById('os-filter').value;
+            const statusFilter = document.getElementById('status-filter').value;
+
+            let filtered = allDevices.filter(dev => {
+                const matchSearch = !search ||
+                    (dev.hostname && dev.hostname.toLowerCase().includes(search)) ||
+                    (dev.serial && dev.serial.toLowerCase().includes(search)) ||
+                    (dev.uuid && dev.uuid.toLowerCase().includes(search));
+                const matchOS = !osFilter || dev.os === osFilter;
+                const matchStatus = !statusFilter || dev.status === statusFilter;
+                return matchSearch && matchOS && matchStatus;
+            });
+
+            renderDevices(filtered);
+            document.getElementById('device-count').textContent = filtered.length + ' of ' + allDevices.length + ' devices';
+        }
+
+        function renderDevices(devices) {
+            const tbody = document.getElementById('device-tbody');
+            if (!devices.length) {
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#4b5563;">No devices found</td></tr>';
+                return;
+            }
+
+            let html = '';
+            devices.forEach(dev => {
+                const statusClass = dev.status || 'offline';
+                const depVal = (dev.dep === 'enabled' || dev.dep === '1' || dev.dep === 1) ? 'Yes' : 'No';
+                const osClass = (dev.os || '').toLowerCase();
+                html += `<tr>
+                    <td><span class="status-dot ${statusClass}" title="${statusClass}"></span></td>
+                    <td><a href="/admin/device/${dev.uuid}" class="device-link">${dev.hostname || '-'}</a></td>
+                    <td>${dev.serial || '-'}</td>
+                    <td><span class="os-badge ${osClass}">${dev.os || '-'}</span></td>
+                    <td>${dev.manifest || '-'}</td>
+                    <td>${dev.account || '-'}</td>
+                    <td>${depVal}</td>
+                    <td>${dev.last_seen || '-'}</td>
+                </tr>`;
+            });
+            tbody.innerHTML = html;
+        }
+
+        // Load devices on page load
+        loadDevices();
+    </script>
+</body>
+</html>
+'''
+
+
+# =============================================================================
 # ROUTES
 # =============================================================================
 
@@ -4155,6 +5671,14 @@ def admin_dashboard():
         categories=categories,
         can_access=check_role_permission
     )
+
+
+@admin_bp.route('/devices')
+@login_required_admin
+def admin_devices():
+    """Device inventory list page"""
+    user = session.get('user', {})
+    return render_template_string(ADMIN_DEVICES_TEMPLATE, user=user)
 
 
 @admin_bp.route('/command/<cmd_id>')
@@ -4595,3 +6119,110 @@ def api_profiles():
     """Get profiles list (JSON)"""
     profiles = get_profiles_by_category()
     return jsonify(profiles)
+
+
+# =============================================================================
+# DEVICE DETAIL ROUTES
+# =============================================================================
+
+@admin_bp.route('/device/<device_uuid>')
+@login_required_admin
+def device_detail(device_uuid):
+    """Device detail page with tabs for hardware, security, profiles, apps, history"""
+    user = session.get('user', {})
+
+    # Validate device access for users with manifest filter
+    if user.get('manifest_filter'):
+        if not validate_device_access(device_uuid, user):
+            return render_template_string('''
+                <html><body>
+                <h1>Access Denied</h1>
+                <p>You do not have permission to view this device.</p>
+                <a href="/admin">Back to Admin</a>
+                </body></html>
+            '''), 403
+
+    # Get device info from database
+    device = get_device_detail(device_uuid)
+    if not device:
+        return render_template_string('''
+            <html><body>
+            <h1>Device Not Found</h1>
+            <p>Device with UUID {{ uuid }} was not found in the database.</p>
+            <a href="/admin">Back to Admin</a>
+            </body></html>
+        ''', uuid=device_uuid), 404
+
+    # Get command history for this device
+    history = get_device_command_history(device_uuid, limit=20)
+
+    return render_template_string(
+        DEVICE_DETAIL_TEMPLATE,
+        user=user,
+        device=device,
+        history=history
+    )
+
+
+@admin_bp.route('/api/device/<device_uuid>/query', methods=['POST'])
+@login_required_admin
+def api_device_query(device_uuid):
+    """API endpoint to query device data (hardware, security, profiles, apps)"""
+    user = session.get('user', {})
+
+    # Validate device access
+    if user.get('manifest_filter'):
+        if not validate_device_access(device_uuid, user):
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+
+    data = request.get_json() or {}
+    query_type = data.get('query_type')
+    force_refresh = data.get('force_refresh', False)
+
+    if not query_type:
+        return jsonify({'success': False, 'error': 'Missing query_type parameter'})
+
+    # Try to get cached data from DB first (unless force_refresh)
+    if not force_refresh:
+        cached = get_device_details(device_uuid, query_type)
+        if cached and cached.get('data'):
+            return jsonify({
+                'success': True,
+                'data': cached['data'],
+                'query_type': query_type,
+                'cached': True,
+                'updated_at': cached.get('updated_at')
+            })
+
+    # Execute MDM query (and save to DB)
+    result = execute_device_query(device_uuid, query_type)
+
+    if result.get('success'):
+        result['cached'] = False
+
+    return jsonify(result)
+
+
+@admin_bp.route('/api/device/<device_uuid>/cached', methods=['GET'])
+@login_required_admin
+def api_device_cached(device_uuid):
+    """API endpoint to get all cached device data from DB"""
+    user = session.get('user', {})
+
+    # Validate device access
+    if user.get('manifest_filter'):
+        if not validate_device_access(device_uuid, user):
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+
+    cached = get_device_details(device_uuid)
+    if cached:
+        return jsonify({
+            'success': True,
+            'data': cached
+        })
+    else:
+        return jsonify({
+            'success': True,
+            'data': None,
+            'message': 'No cached data available'
+        })

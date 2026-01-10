@@ -2,8 +2,8 @@
 
 Web-based management dashboard for Apple MDM (Mobile Device Management) using NanoHUB backend with LDAP authentication and comprehensive admin panel.
 
-**Version:** 2.0
-**Last Updated:** 2026-01-09
+**Version:** 2.1
+**Last Updated:** 2026-01-10
 
 ## Features
 
@@ -42,6 +42,17 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Pagination**: Browse through historical commands
 - **Automatic Cleanup**: Daily cleanup of records older than 90 days
 
+### Device Detail Panel (NEW in v2.1)
+- **Device Card**: Comprehensive device information page (`/admin/device/<uuid>`)
+- **Database Caching**: MDM data cached in MySQL (like Jamf) for instant access
+- **Tab Interface**: Info, Hardware, Security, Profiles, Apps, History tabs
+- **Quick Actions**: Lock, Restart, Erase directly from device page
+- **Update Inventory**: Bulk inventory update command with filters
+  - OS filter (macOS/iOS)
+  - Manifest filter (dynamic list)
+  - Last Updated filter (24h, 7 days, never)
+- **Daily Cron**: Automatic inventory refresh at 14:00
+
 ### Role-Based Access Control
 
 | AD Group | Role | Access |
@@ -73,6 +84,9 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 
 ### VPP Panel
 ![VPP Panel](screenshots/04_vpp_panel.png)
+
+### Device Detail Panel
+![Device Panel](screenshots/05_device_panel.png)
 
 ## Architecture
 
@@ -235,6 +249,23 @@ CREATE TABLE IF NOT EXISTS admin_audit_log (
     INDEX idx_timestamp (timestamp),
     INDEX idx_username (username)
 );
+
+-- Device details cache (NEW in v2.1)
+CREATE TABLE IF NOT EXISTS device_details (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    uuid VARCHAR(255) NOT NULL UNIQUE,
+    hardware_data JSON,
+    security_data JSON,
+    profiles_data JSON,
+    apps_data JSON,
+    hardware_updated_at TIMESTAMP NULL,
+    security_updated_at TIMESTAMP NULL,
+    profiles_updated_at TIMESTAMP NULL,
+    apps_updated_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_uuid (uuid)
+);
 ```
 
 ### 7. Configure Nginx
@@ -323,6 +354,7 @@ To add a new restricted admin role:
 - **Admin Panel**: `https://mdm.example.com:8000/admin`
 - **Command History**: `https://mdm.example.com:8000/admin/history`
 - **VPP Panel**: `https://mdm.example.com:8000/admin/vpp`
+- **Device Detail**: `https://mdm.example.com:8000/admin/device/<uuid>`
 - **Profiles**: `https://mdm.example.com:8000/admin/profiles`
 - **Login**: `https://mdm.example.com:8000/login`
 
@@ -600,7 +632,9 @@ log show --predicate 'eventMessage CONTAINS "declaration" OR eventMessage CONTAI
 │   └── scripts/                # DDM management scripts
 ├── profiles/                   # MDM configuration profiles (not in repo)
 │   └── wireguard_configs/      # WireGuard VPN profiles (not in repo)
-├── tools/api/commands/         # MDM command scripts
+├── tools/
+│   ├── api/commands/           # MDM command scripts
+│   └── inventory_update.py     # Daily inventory cron script
 ├── environment.sh              # Environment variables (API keys, URLs)
 └── venv/                       # Python virtual environment
 
@@ -615,6 +649,25 @@ log show --predicate 'eventMessage CONTAINS "declaration" OR eventMessage CONTAI
 ```
 
 ## Changelog
+
+### Version 2.1 (2026-01-10)
+- **Device Detail Panel**: New comprehensive device information page
+  - Tab interface: Info, Hardware, Security, Profiles, Apps, History
+  - Quick actions: Lock, Restart, Erase from device page
+  - Click hostname in device list to open detail page
+- **Database Caching**: MDM data cached in MySQL (Jamf-style architecture)
+  - `device_details` table with JSON columns for flexible storage
+  - Cached hardware, security, profiles, apps data
+  - Timestamps for each data type
+- **Update Inventory Command**: Bulk inventory update in Commands > Device Control
+  - OS filter (macOS/iOS only)
+  - Manifest filter (dynamic list from database)
+  - Last Updated filter (24h, 7d, never updated)
+  - Select specific devices or use filters to update all matching
+- **Daily Inventory Cron**: Automatic refresh at 14:00
+  - Script: `/opt/nanohub/tools/inventory_update.py`
+  - Updates all devices with hardware, security, profiles, apps data
+- **Energy Saver Profile Fix**: Wake On LAN enabled for battery power
 
 ### Version 2.0 (2026-01-09)
 - **VPP Panel**: New visual panel for VPP license management
