@@ -15,18 +15,18 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Parallel Execution**: 10-20x faster bulk operations with race condition fixes
 - **DDM Support**: Declarative Device Management with KMFDDM integration
 
-### Admin Panel (45+ commands, 11 categories)
-- **Device Setup**: Automated installation workflows for new devices
-- **Profiles**: Install, remove, list profiles (bulk operations supported)
-- **Applications**: Install and manage applications
-- **Device Control**: Lock, unlock (ClearPasscode with UnlockToken for supervised iOS), restart, erase devices
-- **OS Updates**: Schedule and manage OS updates (with device selection, platform-specific options)
-- **Remote Desktop**: Enable/disable remote access (including bulk operations)
+### Admin Panel
+- **Device Setup**: Installation workflows for new devices
+- **Profiles**: Install, remove, list profiles
+- **Applications**: App installation
+- **Device Control**: Lock, unlock, restart, erase
+- **OS Updates**: OS update management
+- **Remote Desktop**: Enable/disable remote access
 - **Security**: Lost mode, security info
-- **Diagnostics**: Device information, MDM analyzer, system reports
-- **VPP Apps**: Volume Purchase Program app management with visual panel
-- **Database Tools**: Device inventory CRUD operations
-- **DDM**: Declarative Device Management - status, assign sets, upload declarations
+- **Diagnostics**: Device info, MDM analyzer
+- **VPP Apps**: VPP license management
+- **Database Tools**: Device inventory operations
+- **DDM**: Declarative Device Management
 
 ### VPP Panel (NEW in v2.0)
 - **Token Management**: VPP token status with expiration warnings
@@ -70,6 +70,9 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 
 ### Profile_list command on Admin Panel
 ![command](screenshots/03_profile_list_command.png)
+
+### VPP Panel
+![VPP Panel](screenshots/04_vpp_panel.png)
 
 ## Architecture
 
