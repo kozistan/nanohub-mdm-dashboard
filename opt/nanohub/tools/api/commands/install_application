@@ -1,0 +1,95 @@
+#!/bin/bash
+
+# NanoHUB Install Application Command
+# Usage: ./install_application DEVICE_UDID MANIFEST_URL [CONFIGURATION_URL] [MANAGEMENT_FLAGS]
+
+# Load environment
+source /opt/nanohub/environment.sh
+
+# Validate arguments
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 DEVICE_UDID MANIFEST_URL [CONFIGURATION_URL] [MANAGEMENT_FLAGS]"
+    echo ""
+    echo "Examples:"
+    echo "  $0 00008020-0001713C1E90003A https://example.com/app.plist"
+    echo "  $0 00008020-0001713C1E90003A https://example.com/app.plist https://example.com/config.plist"
+    echo "  $0 00008020-0001713C1E90003A https://example.com/app.plist '' 'DeleteOnRemoval,PreventBackup'"
+    exit 1
+fi
+
+DEVICE_UDID="$1"
+MANIFEST_URL="$2"
+CONFIGURATION_URL="$3"
+MANAGEMENT_FLAGS="$4"
+
+# NanoMDM API endpoint
+ENDPOINT="api/v1/nanomdm/enqueue/$DEVICE_UDID"
+
+# Generate unique command UUID
+COMMAND_UUID=$(uuidgen 2>/dev/null || python3 -c "import uuid; print(str(uuid.uuid4()))")
+
+# Build InstallApplication plist command
+echo "Installing application on device: $DEVICE_UDID"
+echo "Manifest URL: $MANIFEST_URL"
+echo "Command UUID: $COMMAND_UUID"
+
+# Create InstallApplication plist command
+PLIST_COMMAND="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
+<dict>
+    <key>CommandUUID</key>
+    <string>$COMMAND_UUID</string>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>InstallApplication</string>
+        <key>ManifestURL</key>
+        <string>$MANIFEST_URL</string>"
+
+# Add optional ConfigurationURL
+if [ -n "$CONFIGURATION_URL" ]; then
+    PLIST_COMMAND="$PLIST_COMMAND
+        <key>ConfigurationURL</key>
+        <string>$CONFIGURATION_URL</string>"
+fi
+
+# Add optional ManagementFlags
+if [ -n "$MANAGEMENT_FLAGS" ]; then
+    PLIST_COMMAND="$PLIST_COMMAND
+        <key>ManagementFlags</key>
+        <string>$MANAGEMENT_FLAGS</string>"
+fi
+
+# Close the plist
+PLIST_COMMAND="$PLIST_COMMAND
+    </dict>
+</dict>
+</plist>"
+
+# Send command to NanoMDM
+echo "Sending InstallApplication command..."
+
+RESPONSE=$(curl -s -X PUT \
+    -u "nanohub:$NANOHUB_API_KEY" \
+    -H "Content-Type: application/x-apple-aspen-config" \
+    --data "$PLIST_COMMAND" \
+    "$NANOHUB_URL/$ENDPOINT")
+
+# Parse response
+if echo "$RESPONSE" | jq -e '.status' > /dev/null 2>&1; then
+    echo "Command sent successfully:"
+    echo "$RESPONSE" | jq '.'
+    
+    # Extract command UUID
+    COMMAND_UUID=$(echo "$RESPONSE" | jq -r '.command_uuid // empty')
+    if [ -n "$COMMAND_UUID" ]; then
+        echo ""
+        echo "Command UUID: $COMMAND_UUID"
+        echo "Check device for installation progress"
+    fi
+else
+    echo "Command failed:"
+    echo "$RESPONSE"
+    exit 1
+fi

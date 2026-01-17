@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NanoHUB MDM Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="static/dashboard.css">
+  <link rel="stylesheet" href="static/css/qbone.css">
+  <link rel="stylesheet" href="static/css/admin.css">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+  <link rel="manifest" href="/static/site.webmanifest">
+  <link rel="mask-icon" href="/static/safari-pinned-tab.svg" color="#3572e3">
+  <link rel="shortcut icon" href="/static/favicon.ico">
+  <meta name="msapplication-TileColor" content="#0D0D0D">
+  <meta name="msapplication-config" content="/static/browserconfig.xml">
+  <meta name="theme-color" content="#0D0D0D">
+  <style>
+    .loading-active {
+      color: #5FC812;
+      font-weight: bold;
+      font-size: 1.13em;
+      margin-left: 10px;
+      vertical-align: middle;
+    }
+    .device-row { cursor: pointer; }
+    .device-row:hover { background: #2A2A2A; }
+    .device-row.selected { background: #3A3A3A !important; border-left: 3px solid #5FC812; }
+    .selected-device-info {
+      background: rgba(95,200,18,0.15);
+      border: 1px solid #5FC812;
+      color: #5FC812;
+      padding: 8px 15px;
+      border-radius: 6px;
+      margin-top: 10px;
+      display: none;
+    }
+    .selected-device-info.visible { display: block; }
+    .refresh-btn { background: #2A2A2A; color: #B0B0B0; border: 1px solid #3A3A3A; }
+    .refresh-btn:hover { background: #3A3A3A; border-color: #5FC812; color: #FFFFFF; }
+    .analyzer-table { background: #1E1E1E; }
+    .analyzer-table th { background: #2A2A2A; color: #FFFFFF; }
+    .analyzer-table td { color: #B0B0B0; border-color: #3A3A3A; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div style="display: flex; justify-content: center; align-items: center;">
+      <img id="logo" src="/static/logo.svg" alt="Logo" style="max-height:60px;max-width:200px;"/>
+    </div>
+    <h1>NanoHUB MDM Dashboard</h1>
+
+    <div class="panel" id="dep-panel">
+      <div class="panel-title">DEP Server Information</div>
+      <span class="loading" id="dep-loading"></span>
+      <div id="dep-content"></div>
+      <div class="panel-error" id="dep-error"></div>
+    </div>
+
+    <div class="panel" id="cert-panel">
+      <div class="panel-title">Certificates Expiry</div>
+      <span class="loading" id="cert-loading"></span>
+      <div id="cert-content"></div>
+      <div class="panel-error" id="cert-error"></div>
+    </div>
+
+    <div class="panel" id="device-panel">
+      <div class="panel-title">Device Panel</div>
+      <div class="panel-actions">
+        <input type="text" id="device-search-input" placeholder="Enter hostname / serial / UUID" style="width:220px;padding:7px">
+        <select id="os-filter" style="width:120px;padding:7px;margin-left:6px;">
+          <option value="all">All OS</option>
+          <option value="ios">iOS</option>
+          <option value="macos">macOS</option>
+        </select>
+        <button onclick="searchDevice()" class="refresh-btn" style="margin-left:6px;">Search</button>
+        <button onclick="showAllDevices()" class="refresh-btn" style="margin-left:6px;">Show All</button>
+      </div>
+      <div id="selected-device-info" class="selected-device-info"></div>
+      <span class="loading" id="device-loading"></span>
+      <div id="device-content"></div>
+      <div class="panel-error" id="device-error"></div>
+    </div>
+
+    <div class="panel" id="functions-panel" style="margin-top:18px;">
+      <div class="panel-title">Functions</div>
+      <div class="panel-actions">
+        <button onclick="showSystemReport()" class="refresh-btn" style="margin-left:6px;">System Report</button>
+        <button onclick="deviceInfo()" class="refresh-btn" style="margin-left:6px;">Device Info</button>
+        <button onclick="mdmAnalyzer()" class="refresh-btn" style="margin-left:6px;">MDM Analyzer</button>
+        <button onclick="osUpdates()" class="refresh-btn" style="margin-left:6px;">OS Updates</button>
+        <button onclick="profileList()" class="refresh-btn" style="margin-left:6px;">Profile List</button>
+        <button onclick="installedApps()" class="refresh-btn" style="margin-left:6px;">Installed Applications</button>
+        <button onclick="wakeDevice()" class="refresh-btn" style="margin-left:6px;">Wake Device</button>
+      </div>
+      <span class="loading" id="function-loading"></span>
+      <div id="function-content"></div>
+      <div class="panel-error" id="function-error"></div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="modal-bg" onclick="closeModal(event)">
+    <div class="modal" id="modal-content">
+      <span class="close-modal" onclick="closeModal(event)">&times;</span>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <script>
+    // Pagination state
+    let currentDevices = [];
+    let currentPage = 1;
+    const itemsPerPage = 20;
+
+    // Selected device for functions
+    let selectedDevice = null;
+
+    // Helper function to convert DEP value to Yes/No
+    function formatDep(dep) {
+      if (dep === null || dep === undefined || dep === '') return '-';
+      const val = String(dep).toLowerCase().trim();
+      if (val === '1' || val === 'enabled' || val === 'yes' || val === 'true') return 'Yes';
+      if (val === '0' || val === 'disabled' || val === 'no' || val === 'false') return 'No';
+      return '-';
+    }
+
+    // Error message definitions for each function/context
+    const ERROR_MESSAGES = {
+      // Device Panel errors
+      device_search_empty: "Please enter device hostname, serial or UUID",
+      device_search_not_found: "Device not found",
+      device_search_error: "Device not found",
+      device_show_all_error: "Check database connection",
+
+      // DEP Panel errors
+      dep_load_error: "Something went wrong",
+
+      // Certificate Panel errors
+      cert_load_error: "Something went wrong",
+
+      // Function Panel - Device Info
+      device_info_empty: "Please select a device from the list or enter hostname/serial/UUID",
+      device_info_not_found: "Device not found",
+      device_info_error: "Device not responding",
+
+      // Function Panel - MDM Analyzer
+      mdm_analyzer_empty: "Please select a device from the list or enter hostname/serial/UUID",
+      mdm_analyzer_error: "Check devices.json path",
+
+      // Function Panel - OS Updates
+      os_updates_empty: "Please select a device from the list or enter hostname/serial/UUID",
+      os_updates_not_found: "Device is updated or not responding",
+      os_updates_error: "Device is updated or not responding",
+
+      // Function Panel - Profile List
+      profile_list_empty: "Please select a device from the list or enter hostname/serial/UUID",
+      profile_list_not_found: "Device not found",
+      profile_list_error: "Device not responding",
+
+      // Function Panel - Installed Apps
+      installed_apps_empty: "Please select a device from the list or enter hostname/serial/UUID",
+      installed_apps_not_found: "Device not found",
+      installed_apps_error: "Device not responding",
+
+      // Function Panel - Wake Device
+      wake_device_empty: "Please select a device from the list or enter hostname/serial/UUID",
+      wake_device_error: "Device not responding or offline",
+      wake_device_success: "Wake command sent successfully"
+
+    };
+
+    // Get error message by key
+    function getErrorMessage(key) {
+      return ERROR_MESSAGES[key] || "mrdat brouka do hlavy";
+    }
+
+    // Set spinner/banner for function panel
+    function showFunctionLoading() {
+      let el = document.getElementById('function-loading');
+      el.textContent = 'Waiting for device response...';
+      el.classList.add('loading-active');
+    }
+
+    function hideFunctionLoading() {
+      let el = document.getElementById('function-loading');
+      el.textContent = '';
+      el.classList.remove('loading-active');
+    }
+
+    // Clear function panel error
+    function clearFuncError() {
+      document.getElementById('function-error').textContent = '';
+    }
+
+    // Generic API fetch wrapper
+    async function apiFetch({url, method='GET', body=null, onSuccess, onError, loadingId, errorId, contentId, showBanner}) {
+      if(showBanner && loadingId === 'function-loading') showFunctionLoading();
+      else if(loadingId) document.getElementById(loadingId).textContent = 'Loading...';
+      if(errorId) document.getElementById(errorId).textContent = '';
+
+      try {
+        let opts = {method, headers: {'Content-Type':'application/json'}};
+        if(body) opts.body = JSON.stringify(body);
+        const res = await fetch(url, opts);
+
+        if(res.ok) {
+          const data = await res.json();
+          if(errorId) document.getElementById(errorId).textContent = '';
+          if(onSuccess) onSuccess(data);
+          if(loadingId === 'function-loading' && showBanner) hideFunctionLoading();
+          else if (loadingId) document.getElementById(loadingId).textContent = '';
+        } else {
+          const error = await res.text();
+          if(onError) onError(error);
+          if(loadingId === 'function-loading' && showBanner) hideFunctionLoading();
+          else if (loadingId) document.getElementById(loadingId).textContent = '';
+        }
+      } catch(e) {
+        if(onError) onError(e.message);
+        if(loadingId === 'function-loading' && showBanner) hideFunctionLoading();
+        else if (loadingId) document.getElementById(loadingId).textContent = '';
+      }
+    }
+
+    // Detect input field type (UUID, serial, or hostname)
+    function detectFieldType(input) {
+      // UUID format: 8-4-4-4-12 hex chars
+      if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(input)) return 'uuid';
+      // Apple serial number: 10-12 alphanumeric chars (uppercase)
+      else if (/^[A-Z0-9]{10,12}$/i.test(input)) return 'serial';
+      // Default to hostname
+      else return 'hostname';
+    }
+
+    // Filter devices by OS
+    function filterByOS(devices) {
+      const osFilter = document.getElementById('os-filter').value;
+      if (osFilter === 'all') {
+        return devices;
+      }
+      return devices.filter(dev => dev.os === osFilter);
+    }
+
+    // Get device for functions - either selected or from search input
+    function getDeviceForFunction() {
+      // First check if we have a selected device
+      if (selectedDevice) {
+        return { device: selectedDevice, field: 'uuid', value: selectedDevice.uuid };
+      }
+
+      // Otherwise use search input
+      let input = document.getElementById('device-search-input').value.trim();
+      if (!input) {
+        return null;
+      }
+
+      let field = detectFieldType(input);
+      return { device: null, field: field, value: input };
+    }
+
+    // Select device from list
+    function selectDevice(dev) {
+      selectedDevice = dev;
+
+      // Update UI - highlight selected row
+      document.querySelectorAll('.device-row').forEach(row => {
+        row.classList.remove('selected');
+      });
+      const selectedRow = document.querySelector(`.device-row[data-uuid="${dev.uuid}"]`);
+      if (selectedRow) {
+        selectedRow.classList.add('selected');
+      }
+
+      // Show selected device info
+      const infoEl = document.getElementById('selected-device-info');
+      infoEl.innerHTML = `<strong>Selected:</strong> ${dev.hostname || 'N/A'} | ${dev.serial || 'N/A'} | ${dev.uuid}
+        <button onclick="clearSelectedDevice()" style="margin-left:15px;padding:3px 10px;cursor:pointer;">Clear</button>`;
+      infoEl.classList.add('visible');
+    }
+
+    // Clear selected device
+    function clearSelectedDevice() {
+      selectedDevice = null;
+      document.querySelectorAll('.device-row').forEach(row => {
+        row.classList.remove('selected');
+      });
+      const infoEl = document.getElementById('selected-device-info');
+      infoEl.innerHTML = '';
+      infoEl.classList.remove('visible');
+    }
+
+    // === Device Panel Functions ===
+
+    // Device Panel: Search
+    function searchDevice() {
+      document.getElementById('device-error').textContent = '';
+      let input = document.getElementById('device-search-input').value.trim();
+
+      if(!input) {
+        document.getElementById('device-error').textContent = getErrorMessage('device_search_empty');
+        return;
+      }
+
+      let field = detectFieldType(input);
+      apiFetch({
+        url: '/admin/api/device-search',
+        method: 'POST',
+        body: {field, value: input},
+        onSuccess: devices => {
+          // Backend now returns array of devices to support multiple matches
+          if (!Array.isArray(devices)) {
+            devices = [devices];
+          }
+          // Apply OS filter
+          currentDevices = filterByOS(devices);
+          currentPage = 1;
+          displayDevicesPage();
+        },
+        onError: err => {
+          document.getElementById('device-content').innerHTML = '';
+          document.getElementById('device-error').textContent = getErrorMessage('device_search_error');
+        },
+        loadingId: 'device-loading',
+        errorId: 'device-error',
+        contentId: 'device-content'
+      });
+    }
+
+    // Device Panel: Show All
+    function showAllDevices() {
+      document.getElementById('device-error').textContent = '';
+      apiFetch({
+        url: '/admin/api/devices',
+        method: 'GET',
+        body: null,
+        onSuccess: function (devices) {
+          // Apply OS filter
+          currentDevices = filterByOS(devices);
+          currentPage = 1;
+          displayDevicesPage();
+        },
+        onError: function (err) {
+          document.getElementById('device-content').innerHTML = "";
+          document.getElementById('device-error').textContent = getErrorMessage('device_show_all_error');
+        },
+        loadingId: 'device-loading',
+        errorId: 'device-error',
+        contentId: 'device-content'
+      });
+    }
+
+    // Display devices with pagination
+    function displayDevicesPage() {
+      if (!currentDevices.length) {
+        document.getElementById('device-content').innerHTML = "<div>No devices found.</div>";
+        return;
+      }
+
+      const totalPages = Math.ceil(currentDevices.length / itemsPerPage);
+      const startIdx = (currentPage - 1) * itemsPerPage;
+      const endIdx = Math.min(startIdx + itemsPerPage, currentDevices.length);
+      const pageDevices = currentDevices.slice(startIdx, endIdx);
+
+      let html = `<div style="margin-bottom:10px;color:#B0B0B0;">
+        Showing ${startIdx + 1}-${endIdx} of ${currentDevices.length} devices (click row to select)
+      </div>`;
+
+      html += `<table class="analyzer-table"><tr>
+        <th>Status</th><th>UUID</th><th>Hostname</th><th>Serial</th><th>OS</th><th>Account</th><th>Manifest</th><th>DEP</th></tr>`;
+
+      pageDevices.forEach(function (dev) {
+        let statusColor, statusIcon, statusText;
+        if (dev.status === 'online') {
+          statusColor = '#5FC812';  // Green
+          statusIcon = '●';
+          statusText = 'Online (last 15 min)';
+        } else if (dev.status === 'active') {
+          statusColor = '#F5A623';  // Orange/Yellow
+          statusIcon = '●';
+          statusText = 'Recently Active (last hour)';
+        } else {
+          statusColor = '#B0B0B0';  // Gray
+          statusIcon = '○';
+          statusText = 'Offline (1h+)';
+        }
+        const isSelected = selectedDevice && selectedDevice.uuid === dev.uuid;
+        html += `<tr class="device-row ${isSelected ? 'selected' : ''}" data-uuid="${dev.uuid}" onclick='selectDevice(${JSON.stringify(dev)})'>
+          <td style="text-align:center;color:${statusColor};font-size:1.2em;" title="${statusText} - Last seen: ${dev.last_seen || 'never'}">${statusIcon}</td>
+          <td>${dev.uuid}</td>
+          <td>${dev.hostname}</td>
+          <td>${dev.serial}</td>
+          <td>${dev.os}</td>
+          <td>${dev.account}</td>
+          <td>${dev.manifest}</td>
+          <td>${formatDep(dev.dep)}</td>
+        </tr>`;
+      });
+      html += "</table>";
+
+      // Add pagination controls
+      if (totalPages > 1) {
+        html += `<div style="margin-top:15px;text-align:center;">`;
+
+        // Previous button
+        if (currentPage > 1) {
+          html += `<button onclick="goToPage(${currentPage - 1})" class="refresh-btn" style="margin:0 5px;">« Previous</button>`;
+        }
+
+        // Page numbers
+        for (let i = 1; i <= totalPages; i++) {
+          if (i === currentPage) {
+            html += `<button class="refresh-btn" style="margin:0 2px;font-weight:bold;background:#5FC812;color:#0D0D0D;">${i}</button>`;
+          } else if (i === 1 || i === totalPages || (i >= currentPage - 2 && i <= currentPage + 2)) {
+            html += `<button onclick="goToPage(${i})" class="refresh-btn" style="margin:0 2px;">${i}</button>`;
+          } else if (i === currentPage - 3 || i === currentPage + 3) {
+            html += `<span style="margin:0 5px;">...</span>`;
+          }
+        }
+
+        // Next button
+        if (currentPage < totalPages) {
+          html += `<button onclick="goToPage(${currentPage + 1})" class="refresh-btn" style="margin:0 5px;">Next »</button>`;
+        }
+
+        html += `</div>`;
+      }
+
+      document.getElementById('device-content').innerHTML = html;
+    }
+
+    // Navigate to specific page
+    function goToPage(page) {
+      currentPage = page;
+      displayDevicesPage();
+    }
+
+    // Functions Panel: System Report (Live query)
+    function showSystemReport() {
+      clearFuncError();
+
+      const deviceData = getDeviceForFunction();
+      if (!deviceData) {
+        reportFuncError(getErrorMessage('device_search_empty'));
+        return;
+      }
+
+      showFunctionLoading();
+
+      apiFetch({
+        url: '/api/device-system-report-full',
+        method: 'POST',
+        body: {field: deviceData.field, value: deviceData.value},
+        onSuccess: report => {
+          let html = '<h3 style="margin-bottom:15px;">Device System Report</h3>';
+
+          // Basic Information
+          if (report.basic_info) {
+            html += '<h4 style="margin-top:20px;color:#FFFFFF;font-weight:bold;">Basic Information</h4>';
+            html += '<table class="analyzer-table" style="table-layout:fixed;width:100%;"><colgroup><col style="width:16.67%"><col style="width:83.33%"></colgroup>';
+            html += `<tr><th>UUID</th><td>${report.basic_info.uuid}</td></tr>`;
+            html += `<tr><th>Serial Number</th><td>${report.basic_info.serial}</td></tr>`;
+            html += `<tr><th>Hostname</th><td>${report.basic_info.hostname}</td></tr>`;
+            html += `<tr><th>Operating System</th><td>${report.basic_info.os}</td></tr>`;
+            html += `<tr><th>Manifest</th><td>${report.basic_info.manifest}</td></tr>`;
+            html += `<tr><th>Account</th><td>${report.basic_info.account}</td></tr>`;
+            html += `<tr><th>DEP Status</th><td>${formatDep(report.basic_info.dep)}</td></tr>`;
+
+            let statusColor = '#B0B0B0';
+            if (report.basic_info.status === 'online') statusColor = '#5FC812';
+            else if (report.basic_info.status === 'active') statusColor = '#F5A623';
+
+            html += `<tr><th>Online Status</th><td style="color:${statusColor};font-weight:bold;">${report.basic_info.status}</td></tr>`;
+            html += `<tr><th>Last Seen</th><td>${report.basic_info.last_seen}</td></tr>`;
+            html += '</table>';
+          }
+
+          // Hardware Information
+          if (report.hardware_info) {
+            html += '<h4 style="margin-top:20px;color:#FFFFFF;font-weight:bold;">Hardware Information</h4>';
+            html += '<table class="analyzer-table" style="table-layout:fixed;width:100%;"><colgroup><col style="width:16.67%"><col style="width:83.33%"></colgroup>';
+            html += `<tr><th>Model Name</th><td>${report.hardware_info.model_name}</td></tr>`;
+            html += `<tr><th>Model</th><td>${report.hardware_info.model}</td></tr>`;
+            html += `<tr><th>Product Name</th><td>${report.hardware_info.product_name}</td></tr>`;
+            html += `<tr><th>Storage Capacity</th><td>${report.hardware_info.device_capacity}</td></tr>`;
+            html += `<tr><th>Available Storage</th><td>${report.hardware_info.available_capacity}</td></tr>`;
+            if (report.hardware_info.battery_level !== 'N/A') {
+              html += `<tr><th>Battery Level</th><td>${report.hardware_info.battery_level}</td></tr>`;
+            }
+            html += '</table>';
+          }
+
+          // Software Information
+          if (report.software_info) {
+            html += '<h4 style="margin-top:20px;color:#FFFFFF;font-weight:bold;">Software Information</h4>';
+            html += '<table class="analyzer-table" style="table-layout:fixed;width:100%;"><colgroup><col style="width:16.67%"><col style="width:83.33%"></colgroup>';
+            html += `<tr><th>OS Version</th><td>${report.software_info.os_version}</td></tr>`;
+            html += `<tr><th>Build Version</th><td>${report.software_info.build_version}</td></tr>`;
+            html += '</table>';
+          }
+
+          // Network Information
+          if (report.network_info) {
+            html += '<h4 style="margin-top:20px;color:#FFFFFF;font-weight:bold;">Network Information</h4>';
+            html += '<table class="analyzer-table" style="table-layout:fixed;width:100%;"><colgroup><col style="width:16.67%"><col style="width:83.33%"></colgroup>';
+            html += `<tr><th>Hostname</th><td>${report.network_info.hostname}</td></tr>`;
+            html += `<tr><th>Local Hostname</th><td>${report.network_info.local_hostname}</td></tr>`;
+            html += `<tr><th>Wi-Fi MAC</th><td>${report.network_info.wifi_mac}</td></tr>`;
+            html += `<tr><th>Bluetooth MAC</th><td>${report.network_info.bluetooth_mac}</td></tr>`;
+            html += '</table>';
+          }
+
+          // Cellular Information (if available)
+          if (report.cellular_info && report.cellular_info.technology !== 'N/A') {
+            html += '<h4 style="margin-top:20px;color:#FFFFFF;font-weight:bold;">Cellular Information</h4>';
+            html += '<table class="analyzer-table" style="table-layout:fixed;width:100%;"><colgroup><col style="width:16.67%"><col style="width:83.33%"></colgroup>';
+            html += `<tr><th>Technology</th><td>${report.cellular_info.technology}</td></tr>`;
+            html += `<tr><th>IMEI</th><td>${report.cellular_info.imei}</td></tr>`;
+            html += `<tr><th>MEID</th><td>${report.cellular_info.meid}</td></tr>`;
+            html += `<tr><th>Modem Firmware</th><td>${report.cellular_info.modem_firmware}</td></tr>`;
+            html += '</table>';
+          }
+
+          // Security Information
+          if (report.security_info) {
+            html += '<h4 style="margin-top:20px;color:#FFFFFF;font-weight:bold;">Security & Management</h4>';
+            html += '<table class="analyzer-table" style="table-layout:fixed;width:100%;"><colgroup><col style="width:16.67%"><col style="width:83.33%"></colgroup>';
+            html += `<tr><th>Supervised</th><td>${report.security_info.supervised}</td></tr>`;
+            html += `<tr><th>SIP Enabled</th><td>${report.security_info.sip_enabled}</td></tr>`;
+            if (report.security_info.filevault_enabled !== 'N/A') {
+              html += `<tr><th>FileVault</th><td>${report.security_info.filevault_enabled}</td></tr>`;
+              if (report.security_info.filevault_recovery_key !== 'N/A') {
+                html += `<tr><th>FV Recovery Key</th><td>${report.security_info.filevault_recovery_key}</td></tr>`;
+              }
+            }
+            if (report.security_info.firewall_enabled !== 'N/A') {
+              html += `<tr><th>Firewall</th><td>${report.security_info.firewall_enabled}</td></tr>`;
+              if (report.security_info.firewall_stealth !== 'N/A') {
+                html += `<tr><th>Firewall Stealth Mode</th><td>${report.security_info.firewall_stealth}</td></tr>`;
+              }
+            }
+            if (report.security_info.remote_desktop !== 'N/A') {
+              html += `<tr><th>Remote Desktop</th><td>${report.security_info.remote_desktop}</td></tr>`;
+            }
+            if (report.security_info.secure_boot !== 'N/A') {
+              html += `<tr><th>Secure Boot</th><td>${report.security_info.secure_boot}</td></tr>`;
+            }
+            html += `<tr><th>Activation Lock</th><td>${report.security_info.activation_lock}</td></tr>`;
+            if (report.security_info.recovery_lock !== 'N/A') {
+              html += `<tr><th>Recovery Lock</th><td>${report.security_info.recovery_lock}</td></tr>`;
+            }
+            html += '</table>';
+          }
+
+          document.getElementById('function-content').innerHTML = html;
+          hideFunctionLoading();
+        },
+        onError: err => {
+          reportFuncError('Failed to load system report - device may be offline');
+          hideFunctionLoading();
+        },
+        loadingId: 'function-loading',
+        errorId: 'function-error',
+        contentId: 'function-content',
+        showBanner: true
+      });
+    }
+
+    // Build device table HTML (kept for backward compatibility)
+    function makeDeviceTable(devices) {
+      if (!devices.length) return "<div>No devices found.</div>";
+      let html = `<table class="analyzer-table"><tr>
+        <th>Status</th><th>UUID</th><th>Hostname</th><th>Serial</th><th>OS</th><th>Account</th><th>Manifest</th><th>DEP</th></tr>`;
+      devices.forEach(function (dev) {
+        let statusColor = dev.status === 'online' ? '#5FC812' : '#B0B0B0';
+        let statusIcon = dev.status === 'online' ? '●' : '○';
+        html += `<tr>
+          <td style="text-align:center;color:${statusColor};font-size:1.2em;" title="${dev.status} - Last seen: ${dev.last_seen || 'never'}">${statusIcon}</td>
+          <td>${dev.uuid}</td>
+          <td>${dev.hostname}</td>
+          <td>${dev.serial}</td>
+          <td>${dev.os}</td>
+          <td>${dev.account}</td>
+          <td>${dev.manifest}</td>
+          <td>${formatDep(dev.dep)}</td>
+        </tr>`;
+      });
+      html += "</table>";
+      return html;
+    }
+
+    // === Functions Panel ===
+
+  // Function Panel: Wake Device
+  function wakeDevice() {
+    clearFuncError();
+
+    const deviceData = getDeviceForFunction();
+    if (!deviceData) {
+      reportFuncError(getErrorMessage('wake_device_empty'));
+      return;
+    }
+
+    showFunctionLoading();
+
+    // If we already have the device, use it directly
+    if (deviceData.device) {
+      sendWakeCommand(deviceData.device);
+    } else {
+      // Otherwise search for it first
+      apiFetch({
+        url: '/admin/api/device-search',
+        method: 'POST',
+        body: { field: deviceData.field, value: deviceData.value },
+        onSuccess: devices => {
+          let dev = Array.isArray(devices) ? devices[0] : devices;
+          if (dev && dev.uuid) {
+            sendWakeCommand(dev);
+          } else {
+            reportFuncError(getErrorMessage('wake_device_empty'));
+            hideFunctionLoading();
+          }
+        },
+        onError: err => {
+          reportFuncError(getErrorMessage('wake_device_error'));
+          hideFunctionLoading();
+        }
+      });
+    }
+  }
+
+  function sendWakeCommand(dev) {
+    apiFetch({
+      url: '/api/wake-device',
+      method: 'POST',
+      body: { udid: dev.uuid },
+      onSuccess: result => {
+        let html = `<h3>Wake Device Result</h3>
+                    <table>
+                      <tr><th>Device</th><td>${dev.hostname || ''} / ${dev.serial || ''}</td></tr>
+                      <tr><th>UUID</th><td>${dev.uuid || ''}</td></tr>
+                      <tr><th>Wake Time</th><td>${result.wake_time || ''}</td></tr>
+                      <tr><th>Status</th><td>${result.result?.status || 'Pending'}</td></tr>
+                      <tr><th>Timestamp</th><td>${result.result?.timestamp || ''}</td></tr>
+                    </table>
+                    <div style="margin-top:15px;color:#5FC812;font-weight:600;">
+                      Device was waked up after ~30 seconds
+                    </div>`;
+        document.getElementById('function-content').innerHTML = html;
+        hideFunctionLoading();
+      },
+      onError: err => {
+        reportFuncError(getErrorMessage('wake_device_error'));
+        hideFunctionLoading();
+      }
+    });
+  }
+
+    // Function Panel: Device Info
+    function deviceInfo() {
+      clearFuncError();
+
+      const deviceData = getDeviceForFunction();
+      if (!deviceData) {
+        reportFuncError(getErrorMessage('device_info_empty'));
+        return;
+      }
+
+      apiFetch({
+        url: '/api/device-info',
+        method: 'POST',
+        body: {type: deviceData.field, value: deviceData.value},
+        onSuccess: function(info) {
+          let html = `<h3>Device Info Result</h3>
+            <table class="analyzer-table" style="table-layout:fixed;width:100%;"><colgroup><col style="width:16.67%"><col style="width:83.33%"></colgroup>
+              <tr><th>Device Name</th><td>${info.device_name||''}</td></tr>
+              <tr><th>OS Version</th><td>${info.os_version||''}</td></tr>
+              <tr><th>Serial Number</th><td>${info.serial_number||''}</td></tr>
+              <tr><th>Status</th><td>${info.status||''}</td></tr>
+              <tr><th>Checkin Time</th><td>${info.checkin_time||''}</td></tr>
+            </table>`;
+          document.getElementById('function-content').innerHTML = html;
+        },
+        onError: function(err) {
+          reportFuncError(getErrorMessage('device_info_error'));
+        },
+        loadingId: 'function-loading',
+        errorId: 'function-error',
+        contentId: 'function-content',
+        showBanner: true
+      });
+    }
+
+    // Function Panel: MDM Analyzer
+    function mdmAnalyzer() {
+      clearFuncError();
+
+      const deviceData = getDeviceForFunction();
+      if (!deviceData) {
+        reportFuncError(getErrorMessage('mdm_analyzer_empty'));
+        return;
+      }
+
+      apiFetch({
+        url: '/api/mdm-analyzer?type=' + deviceData.field + '&value=' + encodeURIComponent(deviceData.value),
+        onSuccess: function(json) {
+          let sections = [
+            "ACTIVITY_SUMMARY",
+            "DEVICE_INFO",
+            "DEVICE_AUTH",
+            "CURRENT_FULL_DEVICE_STATUS",
+            "RECENT_CHECKINS",
+            "COMMANDS_BY_TYPE",
+            "PENDING_COMMANDS"
+          ];
+          let html = "<h3>MDM Analyzer Result</h3>";
+          sections.forEach(function(section) {
+            let rows = json[section] || [];
+            if (rows.length > 0) {
+              html += `<h4 style="margin-top:18px;">${section.replace(/_/g," ")}</h4>`;
+              html += makeAnalyzerTable(rows, section);
+            }
+          });
+          document.getElementById('function-content').innerHTML = html || '<div>No analyzer data found.</div>';
+        },
+        onError: function(err) {
+          reportFuncError(getErrorMessage('mdm_analyzer_error'));
+        },
+        loadingId: 'function-loading',
+        errorId: 'function-error',
+        contentId: 'function-content',
+        showBanner: true
+      });
+    }
+
+    // Build analyzer table HTML
+    function makeAnalyzerTable(rows, section) {
+      if (!rows.length) return '';
+      let keySet = new Set();
+      rows.forEach(obj => Object.keys(obj).forEach(k => keySet.add(k)));
+      let keys = Array.from(keySet);
+
+      const sectionLabelMap = {
+        "ACTIVITY_SUMMARY": "time",
+        "DEVICE_INFO": "time",
+        "DEVICE_AUTH": "build",
+        "CURRENT_FULL_DEVICE_STATUS": "status",
+        "COMMANDS_BY_TYPE": "timestamp",
+        "RECENT_CHECKINS": "check_in_time",
+        "PENDING_COMMANDS": "command_uuid"
+      };
+
+      let headerMap = keys.map((k, idx) =>
+        (k === "")
+          ? sectionLabelMap[section] || "Label"
+          : k
+      );
+
+      let html = '<table class="analyzer-table"><tr>';
+      headerMap.forEach(function(k) { html += `<th>${k}</th>`; });
+      html += '</tr>';
+      rows.forEach(function(row) {
+        html += '<tr>';
+        keys.forEach(function(origKey, idx) {
+          html += `<td>${row[origKey] !== undefined ? row[origKey] : ''}</td>`;
+        });
+        html += '</tr>';
+      });
+      html += '</table>';
+      return html;
+    }
+
+    // Function Panel: OS Updates
+    function osUpdates() {
+      clearFuncError();
+
+      const deviceData = getDeviceForFunction();
+      if (!deviceData) {
+        reportFuncError(getErrorMessage('os_updates_empty'));
+        return;
+      }
+
+      showFunctionLoading();
+
+      // If we already have the device, use it directly
+      if (deviceData.device) {
+        fetchOsUpdates(deviceData.device);
+      } else {
+        apiFetch({
+          url: '/admin/api/device-search',
+          method: 'POST',
+          body: { field: deviceData.field, value: deviceData.value },
+          onSuccess: devices => {
+            let dev = Array.isArray(devices) ? devices[0] : devices;
+            if (dev && dev.uuid) {
+              fetchOsUpdates(dev);
+            } else {
+              reportFuncError(getErrorMessage('os_updates_not_found'));
+              hideFunctionLoading();
+            }
+          },
+          onError: err => {
+            reportFuncError(getErrorMessage('os_updates_error'));
+            hideFunctionLoading();
+          }
+        });
+      }
+    }
+
+    function fetchOsUpdates(dev) {
+      apiFetch({
+        url: '/api/os-updates',
+        method: 'POST',
+        body: { udid: dev.uuid },
+        onSuccess: updates => {
+          let html = `<h3>OS Updates Result</h3>
+            <table style="table-layout:fixed;width:100%;"><colgroup><col style="width:16.67%"><col style="width:83.33%"></colgroup>
+            <tr><th>Device</th><td>${(dev.hostname || '') + ' / ' + (dev.serial || '')}</td></tr>
+            <tr><th>UUID</th><td>${dev.uuid || ''}</td></tr></table><br>
+            <table><tr><th>Name</th><th>ProductKey</th><th>Version</th><th>Critical</th><th>RestartRequired</th></tr>`;
+          if (Array.isArray(updates) && updates.length) {
+            updates.forEach(u => {
+              html += `<tr>
+                <td>${u.ProductName || u.HumanReadableName || u.Version || ''}</td>
+                <td>${u.ProductKey || ''}</td>
+                <td>${u.Version || ''}</td>
+                <td>${u.IsCritical ? 'Yes' : 'No'}</td>
+                <td>${u.RestartRequired ? 'Yes' : 'No'}</td>
+                </tr>`;
+            });
+            html += "</table>";
+          } else {
+            html += "</table><div>No OS updates available.</div>";
+          }
+          document.getElementById('function-content').innerHTML = html;
+          hideFunctionLoading();
+        },
+        onError: err => {
+          reportFuncError(getErrorMessage('os_updates_error'));
+          hideFunctionLoading();
+        }
+      });
+    }
+
+    // Function Panel: Profile List
+    function profileList() {
+      clearFuncError();
+
+      const deviceData = getDeviceForFunction();
+      if (!deviceData) {
+        reportFuncError(getErrorMessage('profile_list_empty'));
+        return;
+      }
+
+      showFunctionLoading();
+
+      if (deviceData.device) {
+        fetchProfileList(deviceData.device);
+      } else {
+        apiFetch({
+          url: '/admin/api/device-search',
+          method: 'POST',
+          body: { field: deviceData.field, value: deviceData.value },
+          onSuccess: devices => {
+            let dev = Array.isArray(devices) ? devices[0] : devices;
+            if (dev && dev.uuid) {
+              fetchProfileList(dev);
+            } else {
+              reportFuncError(getErrorMessage('profile_list_not_found'));
+              hideFunctionLoading();
+            }
+          },
+          onError: err => {
+            reportFuncError(getErrorMessage('profile_list_error'));
+            hideFunctionLoading();
+          }
+        });
+      }
+    }
+
+    function fetchProfileList(dev) {
+      apiFetch({
+        url: '/api/profile-list',
+        method: 'POST',
+        body: { udid: dev.uuid },
+        onSuccess: profiles => {
+          let html = `<h3>Profile List Result</h3>
+                      <table>
+                        <tr><th>Display Name</th><th>Identifier</th></tr>`;
+          profiles.forEach(p => {
+            html += `<tr>
+                      <td>${p.PayloadDisplayName || ''}</td>
+                      <td>${p.PayloadIdentifier || ''}</td>
+                    </tr>`;
+          });
+          html += "</table>";
+          document.getElementById('function-content').innerHTML = html;
+          hideFunctionLoading();
+        },
+        onError: err => {
+          reportFuncError(getErrorMessage('profile_list_error'));
+          hideFunctionLoading();
+        }
+      });
+    }
+
+    // Function Panel: Installed Applications
+    function installedApps() {
+      clearFuncError();
+
+      const deviceData = getDeviceForFunction();
+      if (!deviceData) {
+        reportFuncError(getErrorMessage('installed_apps_empty'));
+        return;
+      }
+
+      showFunctionLoading();
+
+      if (deviceData.device) {
+        fetchInstalledApps(deviceData.device);
+      } else {
+        apiFetch({
+          url: '/admin/api/device-search',
+          method: 'POST',
+          body: { field: deviceData.field, value: deviceData.value },
+          onSuccess: devices => {
+            let dev = Array.isArray(devices) ? devices[0] : devices;
+            if (dev && dev.uuid) {
+              fetchInstalledApps(dev);
+            } else {
+              reportFuncError(getErrorMessage('installed_apps_not_found'));
+              hideFunctionLoading();
+            }
+          },
+          onError: err => {
+            reportFuncError(getErrorMessage('installed_apps_error'));
+            hideFunctionLoading();
+          }
+        });
+      }
+    }
+
+    function fetchInstalledApps(dev) {
+      apiFetch({
+        url: '/api/installed-apps',
+        method: 'POST',
+        body: { udid: dev.uuid },
+        onSuccess: apps => {
+          let html = `<h3>Installed Applications Result</h3>
+                      <table>
+                        <tr><th>Name</th><th>Bundle ID</th><th>Version</th></tr>`;
+          apps.forEach(a => {
+            html += `<tr>
+                      <td>${a.Name || ''}</td>
+                      <td>${a.BundleID || ''}</td>
+                      <td>${a.Version || ''}</td>
+                    </tr>`;
+          });
+          html += "</table>";
+          document.getElementById('function-content').innerHTML = html;
+          hideFunctionLoading();
+        },
+        onError: err => {
+          reportFuncError(getErrorMessage('installed_apps_error'));
+          hideFunctionLoading();
+        }
+      });
+    }
+
+    // Display function panel error message
+    function reportFuncError(msg) {
+      document.getElementById('function-error').textContent = msg;
+      document.getElementById('function-content').innerHTML = '';
+      hideFunctionLoading();
+    }
+
+    // === Modal Functions ===
+
+    // Open modal with content
+    function openModal(title, content) {
+      document.getElementById('modal-body').innerHTML = `<h3>${title}</h3><pre style='max-width:500px;'>${content}</pre>`;
+      document.getElementById('modal-bg').style.display='flex';
+    }
+
+    // Close modal
+    function closeModal(e) {
+      if(e.target.classList.contains('modal-bg')||e.target.classList.contains('close-modal')) {
+        document.getElementById('modal-bg').style.display='none';
+      }
+    }
+
+    // === Page Load Functions ===
+
+    // Initialize page on load
+    window.onload = function() {
+      loadDEP();
+      loadCertExpiry();
+    };
+
+    // Load DEP server information
+    function loadDEP() {
+      apiFetch({
+        url: '/api/dep-account-detail',
+        onSuccess: data => {
+          let html = `<table>
+            <tr><th>Server Name</th><td>${data.server_name||''}</td></tr>
+            <tr><th>Organization</th><td>${data.org_name||''}, ${data.org_address||''}</td></tr>
+            <tr><th>Admin</th><td>${data.admin_id||''}</td></tr>
+            <tr><th>Server UUID</th><td>${data.server_uuid||''}</td></tr>
+            <tr><th>Org Email</th><td>${data.org_email||''}</td></tr>
+            <tr><th>Org Phone</th><td>${data.org_phone||''}</td></tr>
+          </table>`;
+          document.getElementById('dep-content').innerHTML = html;
+        },
+        onError: err => {
+          document.getElementById('dep-content').innerHTML = '';
+          document.getElementById('dep-error').textContent = getErrorMessage('dep_load_error');
+        },
+        loadingId: 'dep-loading',
+        errorId: 'dep-error',
+        contentId: 'dep-content'
+      });
+    }
+
+    // Load certificate expiry information
+    function loadCertExpiry() {
+      apiFetch({
+        url: '/api/cfg-get-cert',
+        onSuccess: function (certs) {
+          var html = '<table class="analyzer-table"><tr><th>Item</th><th>Description</th><th>Expiry Date</th><th>Renew</th></tr>';
+          certs.forEach(function(cert) {
+            var renewLink = cert.url ? '<a href="' + cert.url + '" target="_blank" title="Open ' + cert.url + '">Renew</a>' : '-'; html += '<tr><td>' + cert.name + '</td><td>' + cert.usage + '</td><td>' + cert.expiry + '</td><td>' + renewLink + '</td></tr>';
+          });
+          html += '</table>';
+          document.getElementById("cert-content").innerHTML = html;
+        },
+        onError: function (err) {
+          document.getElementById("cert-content").innerHTML = '';
+          document.getElementById("cert-error").textContent = getErrorMessage('cert_load_error');
+        },
+        loadingId: "cert-loading",
+        errorId: "cert-error",
+        contentId: "cert-content"
+      });
+    }
+  </script>
+  <script>
+    fetch('/admin/api/settings/logo/current')
+      .then(r => r.json())
+      .then(data => {
+        if (data.logo) document.getElementById('logo').src = data.logo;
+      })
+      .catch(() => {});
+  </script>
+</body>
+</html>

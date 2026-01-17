@@ -1,0 +1,254 @@
+#!/bin/bash
+
+# Bulk New Device Installation Script
+# Author: NanoHub Tools
+# Description: Automated device installation for Karlin and Belehradska branches
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Function to print colored messages
+print_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Function to validate UUID format
+validate_uuid() {
+    local uuid="$1"
+    # Standard UUID format: 8-4-4-4-12 hexadecimal characters (macOS)
+    # iOS UUID format: 8-16 hexadecimal characters (e.g., 00008140-001A2CCC3651801C)
+    if [[ $uuid =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] || \
+       [[ $uuid =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to wait 5 seconds between commands
+wait_interval() {
+    echo "Waiting 5 seconds..."
+    sleep 5
+}
+
+# Function to execute command with wait
+execute_command() {
+    local cmd="$1"
+    print_info "Executing: $cmd"
+    eval "$cmd"
+    wait_interval
+}
+
+# Check prerequisites
+print_warning "IMPORTANT: Before continuing, verify that these commands were executed on the client computer:"
+echo "  1. sudo softwareupdate --install-rosetta"
+echo "  2. sudo xcode-select --install"
+echo ""
+read -p "Have both commands been executed? (yes/skip): " prereq_check
+
+if [[ "$prereq_check" != "yes" ]]; then
+    print_warning "Skipping prerequisite verification. Continuing anyway..."
+fi
+
+# Select branch
+echo ""
+print_info "Select branch:"
+echo "  1 - Karlin"
+echo "  2 - Belehradska"
+read -p "Enter branch number (1 or 2): " branch
+
+if [[ "$branch" != "1" && "$branch" != "2" ]]; then
+    print_error "Invalid branch selection. Enter 1 or 2."
+    exit 1
+fi
+
+# Select platform
+echo ""
+print_info "Select platform:"
+echo "  1 - macOS"
+echo "  2 - iOS"
+read -p "Enter platform number (1 or 2): " platform
+
+if [[ "$platform" != "1" && "$platform" != "2" ]]; then
+    print_error "Invalid platform selection. Enter 1 or 2."
+    exit 1
+fi
+
+# Get UUID
+echo ""
+while true; do
+    read -p "Enter device UUID (format: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX): " uuid
+
+    if [[ -z "$uuid" ]]; then
+        print_error "UUID cannot be empty."
+        continue
+    fi
+
+    if validate_uuid "$uuid"; then
+        print_info "UUID format is valid: $uuid"
+        break
+    else
+        print_error "Invalid UUID format. Expected format: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+        print_error "Example: 1FABE57D-AD95-597F-8E02-E8251E4A1933"
+        read -p "Try again or type 'skip' to exit: " retry
+        if [[ "$retry" == "skip" ]]; then
+            print_warning "UUID validation skipped. Exiting script."
+            exit 0
+        fi
+    fi
+done
+
+# Select Munki profile type for macOS
+if [[ "$platform" == "1" ]]; then
+    echo ""
+    print_info "Select Munki profile type:"
+    echo "  1 - Default"
+    echo "  2 - Tech"
+    read -p "Enter Munki profile type (1 or 2): " munki_type
+
+    if [[ "$munki_type" != "1" && "$munki_type" != "2" ]]; then
+        print_error "Invalid Munki profile type selection. Enter 1 or 2."
+        exit 1
+    fi
+fi
+
+# macOS Installation
+if [[ "$platform" == "1" ]]; then
+    print_info "Starting macOS installation..."
+    echo ""
+
+    # Common profiles for both branches
+    execute_command "install_profile $uuid profiles/sloto.macos.appleRoot.profile.signed.mobileconfig"
+    execute_command "install_profile $uuid profiles/sloto.macos.Root.profile.signed.mobileconfig"
+    execute_command "install_profile $uuid profiles/sloto.macos.EnergySaver.profile.signed.mobileconfig"
+
+    # Branch-specific Munki profile based on branch and type
+    if [[ "$branch" == "1" ]]; then
+        # Karlin
+        if [[ "$munki_type" == "1" ]]; then
+            execute_command "install_profile $uuid profiles/sloto.macos.Munki-Default.profile.signed.mobileconfig"
+        else
+            execute_command "install_profile $uuid profiles/sloto.macos.Munki-Tech.profile.signed.mobileconfig"
+        fi
+        execute_command "install_profile $uuid profiles/sloto.macos.SSO.Drive.profile.signed.mobileconfig"
+    else
+        # Belehradska
+        if [[ "$munki_type" == "1" ]]; then
+            execute_command "install_profile $uuid profiles/sloto.macos.Munki-Bel-Default.profile.signed.mobileconfig"
+        else
+            execute_command "install_profile $uuid profiles/sloto.macos.Munki-Bel-Tech.profile.signed.mobileconfig"
+        fi
+    fi
+
+    # Common profiles continued
+    execute_command "install_profile $uuid profiles/sloto.macos.Restrictions.profile.signed.mobileconfig"
+    execute_command "install_profile $uuid profiles/sloto.macos.Account-Disabled.profile.signed.mobileconfig"
+    execute_command "install_profile $uuid profiles/sloto.macos.Firewall.profile.signed.mobileconfig"
+
+    # Applications
+    execute_command "install_application $uuid https://repo.sloto.space/munki/sloto_mdmagent.plist"
+    execute_command "install_application $uuid https://repo.sloto.space/munki/sloto_munki7.plist"
+
+    # Branch-specific applications for Karlin
+    if [[ "$branch" == "1" ]]; then
+        execute_command "install_application $uuid https://repo.sloto.space/munki/sloto_drivemap.plist"
+        execute_command "install_application $uuid https://repo.sloto.space/munki/sloto_removeadmin_manifest.plist"
+    fi
+
+    # Directory Services setup - only for Karlin
+    if [[ "$branch" == "1" ]]; then
+        echo ""
+        read -p "Is hostname configured on the device? (yes/skip): " hostname_set
+
+        if [[ "$hostname_set" == "yes" ]]; then
+            execute_command "install_profile $uuid profiles/sloto.macos.DirectoryServices.profile.signed.mobileconfig"
+        else
+            read -p "Enter hostname (e.g. sloto08, or leave empty to skip): " hostname_value
+            if [[ -n "$hostname_value" ]]; then
+                execute_command "send_command $uuid hostname $hostname_value"
+                execute_command "install_profile $uuid profiles/sloto.macos.DirectoryServices.profile.signed.mobileconfig"
+            else
+                print_warning "Skipping Directory Services setup."
+            fi
+        fi
+    fi
+
+    # FileVault profile - check for client login
+    echo ""
+    print_warning "IMPORTANT: For FileVault profile installation, CLIENT profile must be logged in, not admin!"
+    read -p "Is client (not admin) logged in? (yes/skip): " client_logged
+
+    if [[ "$client_logged" == "yes" ]]; then
+        execute_command "install_profile $uuid profiles/sloto.macos.Filevault.profile.signed.mobileconfig"
+    else
+        print_warning "Skipping FileVault profile installation."
+    fi
+
+    # WireGuard profile - only for Karlin
+    if [[ "$branch" == "1" ]]; then
+        echo ""
+        if [[ "$hostname_set" == "yes" ]] || [[ -n "$hostname_value" ]]; then
+            local hostname_to_use="${hostname_value:-unknown}"
+            if [[ "$hostname_set" == "yes" ]]; then
+                read -p "Enter hostname to search for WireGuard profile: " hostname_to_use
+            fi
+
+            print_info "Searching for WireGuard profile for hostname: $hostname_to_use"
+
+            # Search for WireGuard profile
+            wg_profile=$(find profiles/wireguard_configs/30_account/macos/ -name "*${hostname_to_use}*.signed.mobileconfig" 2>/dev/null | head -n 1)
+
+            if [[ -n "$wg_profile" ]]; then
+                execute_command "install_profile $uuid $wg_profile"
+                print_info "WireGuard profile successfully installed."
+            else
+                print_warning "WireGuard profile for hostname '$hostname_to_use' not found in profiles/wireguard_configs/30_account/macos/"
+                read -p "Do you want to enter the profile path manually? (yes/skip): " manual_wg
+                if [[ "$manual_wg" == "yes" ]]; then
+                    read -p "Enter relative path to WireGuard profile: " manual_wg_path
+                    if [[ -f "$manual_wg_path" ]]; then
+                        execute_command "install_profile $uuid $manual_wg_path"
+                    else
+                        print_error "File '$manual_wg_path' not found. Skipping WireGuard installation."
+                    fi
+                else
+                    print_warning "Skipping WireGuard profile installation."
+                fi
+            fi
+        fi
+    fi
+
+# iOS Installation
+elif [[ "$platform" == "2" ]]; then
+    print_info "Starting iOS installation..."
+    echo ""
+
+    execute_command "install_profile $uuid profiles/sloto.ios.appleRoot.profile.signed.mobileconfig"
+    execute_command "install_profile $uuid profiles/sloto.ios.Account-Disabled.profile.signed.mobileconfig"
+    execute_command "install_profile $uuid profiles/sloto.ios.Restrictions.profile.signed.mobileconfig"
+    execute_command "install_profile $uuid profiles/sloto.ios.whitelist.signed.mobileconfig"
+fi
+
+echo ""
+print_info "================================"
+print_info "Installation completed!"
+print_info "================================"
+print_info "Branch: $([ "$branch" == "1" ] && echo "Karlin" || echo "Belehradska")"
+print_info "Platform: $([ "$platform" == "1" ] && echo "macOS" || echo "iOS")"
+if [[ "$platform" == "1" ]]; then
+    print_info "Munki Type: $([ "$munki_type" == "1" ] && echo "Default" || echo "Tech")"
+fi
+print_info "UUID: $uuid"

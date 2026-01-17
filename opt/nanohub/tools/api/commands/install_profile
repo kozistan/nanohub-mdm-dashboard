@@ -1,0 +1,89 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+#
+# NanoHUB InstallProfile Script
+#
+# Description:
+# This script installs a given mobileconfig profile to a specified device using NanoMDM API.
+#
+# Usage:
+#   ./install_profile.sh <UDID> <profile.mobileconfig>
+#
+# Parameters:
+#   <UDID>               - Unique Device Identifier of the target device
+#   <profile.mobileconfig> - Path to the mobileconfig profile file to install
+#
+# Example:
+#   ./install_profile.sh 00008020-0001713C1E90003A /path/to/wifi.mobileconfig
+#
+# Requirements:
+#   - Profile file must exist at specified path
+#   - NanoMDM API accessible with proper authentication
+#
+
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 <UDID> <profile.mobileconfig>"
+    echo "Example: $0 00008020-0001713C1E90003A /path/to/wifi.mobileconfig"
+    exit 1
+fi
+
+UDID="$1"
+PROFILE_PATH="$2"
+
+if [ ! -f "$PROFILE_PATH" ]; then
+    echo "Error: Profile file '$PROFILE_PATH' not found!"
+    exit 1
+fi
+
+CMD_UUID=$(uuidgen)
+PROFILE_BASE64=$(base64 -w 0 "$PROFILE_PATH")
+
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+cat > "$TEMP_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>InstallProfile</string>
+        <key>Payload</key>
+        <data>
+        $PROFILE_BASE64
+        </data>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
+echo "Installing profile: $(basename "$PROFILE_PATH")"
+echo "Device UDID: $UDID"
+echo "Command UUID: $CMD_UUID"
+
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "Profile installation command sent successfully."
+    echo "Response: $BODY"
+else
+    echo "Failed to send profile installation command."
+    echo "HTTP Code: $HTTP_CODE"
+    echo "Response: $BODY"
+    exit 1
+fi
+
+rm -f "$TEMP_PLIST"
+
+echo ""
+echo "Monitor installation with:"
+echo "tail -f /var/log/nanohub/webhook.log | grep -E '(InstallProfile|profile)'"

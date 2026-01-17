@@ -1,0 +1,10 @@
+{
+    "Type": "com.apple.management.organization-info",
+    "Identifier": "com.sloto.ddm.org-info",
+    "Payload": {
+        "Name": "TOLAR COMPANY s.r.o.",
+        "Email": "support@sloto.space",
+        "Phone": "+420123456789",
+        "Address": "Czech Republic"
+    }
+}

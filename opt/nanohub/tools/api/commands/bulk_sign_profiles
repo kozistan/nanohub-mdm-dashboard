@@ -1,0 +1,126 @@
+#!/bin/bash
+# NanoHUB Batch Sign Profiles - podle MicroMDM scriptu
+# Usage: ./sign_profiles_batch.sh <directory_path>
+
+set -euo pipefail
+
+# Paths - UPDATED for NanoHUB
+declare -r SIGN_SCRIPT="/home/microm/nanohub/tools/api/commands/sign_profile"
+
+# Check argument
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 /path/to/directory"
+    echo "Example: $0 /home/microm/nanohub/profiles"
+    echo "Example: $0 /var/www/mdm"
+    exit 1
+fi
+
+INPUT_DIR="$1"
+
+# Verify input directory exists
+if [ ! -d "$INPUT_DIR" ]; then
+    echo "[ERROR] Directory '$INPUT_DIR' not found."
+    exit 1
+fi
+
+# Verify sign script exists
+if [ ! -f "$SIGN_SCRIPT" ]; then
+    echo "[ERROR] Sign script '$SIGN_SCRIPT' not found."
+    echo "Create it first or check the path."
+    exit 1
+fi
+
+echo "[INFO] Searching for unsigned profiles in: $INPUT_DIR"
+
+# Find all .mobileconfig files that are NOT already signed AND don't have a signed version
+profiles=()
+while IFS= read -r -d '' profile; do
+    basename_profile="$(basename "$profile" .mobileconfig)"
+    dirname_profile="$(dirname "$profile")"
+    signed_profile="$dirname_profile/${basename_profile}.signed.mobileconfig"
+    
+    # Only add if signed version doesn't exist
+    if [ ! -f "$signed_profile" ]; then
+        profiles+=("$profile")
+    fi
+done < <(find "$INPUT_DIR" -type f -name '*.mobileconfig' ! -name '*.signed.mobileconfig' -print0)
+
+if [ ${#profiles[@]} -eq 0 ]; then
+    echo "[OK] No unsigned profiles found (or all already have signed versions)."
+    
+    # Show what we found
+    signed_count=$(find "$INPUT_DIR" -type f -name '*.signed.mobileconfig' | wc -l)
+    total_count=$(find "$INPUT_DIR" -type f -name '*.mobileconfig' | wc -l)
+    
+    if [ $total_count -gt 0 ]; then
+        echo ""
+        echo "Directory contents:"
+        echo "  Total profiles: $total_count"
+        echo "  Already signed: $signed_count"
+        echo "  Unsigned: $((total_count - signed_count))"
+    fi
+    
+    exit 0
+fi
+
+echo "[INFO] Found ${#profiles[@]} unsigned profiles to sign..."
+echo ""
+
+any_error=0
+signed_count=0
+
+for profile in "${profiles[@]}"; do
+    echo "==============================================="
+    echo "Processing: $profile"
+    echo "==============================================="
+    
+    basename_profile="$(basename "$profile" .mobileconfig)"
+    dirname_profile="$(dirname "$profile")"
+    signed_profile="$dirname_profile/${basename_profile}.signed.mobileconfig"
+    
+    # Sign the profile - disable exit on error temporarily
+    set +e
+    "$SIGN_SCRIPT" "$profile"
+    result=$?
+    set -e
+    
+    if [ $result -eq 0 ]; then
+        echo ""
+        echo "[OK] Successfully signed: $signed_profile"
+        signed_count=$((signed_count + 1))
+    else
+        echo ""
+        echo "[ERROR] Failed to sign: $profile" >&2
+        any_error=1
+    fi
+    
+    echo ""
+done
+
+echo "==============================================="
+echo "BATCH SIGNING SUMMARY"
+echo "==============================================="
+echo "Directory: $INPUT_DIR"
+echo "Processed: ${#profiles[@]} profiles"
+echo "Successfully signed: $signed_count profiles"
+echo "Failed: $((${#profiles[@]} - signed_count)) profiles"
+
+if [[ $any_error -eq 1 ]]; then
+    echo ""
+    echo "[WARNING] Some profiles failed to sign. See errors above." >&2
+    echo ""
+    echo "Common issues:"
+    echo "  - Invalid mobileconfig format"
+    echo "  - Certificate/key permissions"
+    echo "  - mdmctl not installed"
+    echo "  - Incorrect password"
+    exit 1
+else
+    echo ""
+    echo "[SUCCESS] All profiles signed successfully!"
+    echo ""
+    echo "Signed profiles are ready for:"
+    echo "  - Installation via install_profile.sh"
+    echo "  - Upload to web server"
+    echo "  - Distribution to devices"
+fi

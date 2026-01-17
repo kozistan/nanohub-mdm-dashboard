@@ -1,0 +1,32 @@
+/* QB One Font Family */
+@font-face {
+    font-family: 'QB One';
+    src: url('../fonts/Web Fonts/qbone_regular_macroman/qbone-regular-webfont.woff2') format('woff2'),
+         url('../fonts/Web Fonts/qbone_regular_macroman/qbone-regular-webfont.woff') format('woff');
+    font-weight: 400;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: 'QB One';
+    src: url('../fonts/Web Fonts/qbone_medium_macroman/qbone-medium-webfont.woff2') format('woff2'),
+         url('../fonts/Web Fonts/qbone_medium_macroman/qbone-medium-webfont.woff') format('woff');
+    font-weight: 500;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: 'QB One';
+    src: url('../fonts/Web Fonts/qbone_semibold_macroman/qbone-semibold-webfont.woff2') format('woff2'),
+         url('../fonts/Web Fonts/qbone_semibold_macroman/qbone-semibold-webfont.woff') format('woff');
+    font-weight: 600;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: 'QB One';
+    src: url('../fonts/Web Fonts/qbone_bold_macroman/qbone-bold-webfont.woff2') format('woff2'),
+         url('../fonts/Web Fonts/qbone_bold_macroman/qbone-bold-webfont.woff') format('woff');
+    font-weight: 700;
+    font-style: normal;
+}

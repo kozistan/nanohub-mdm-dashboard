@@ -1,0 +1,333 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+
+# NanoHUB Workflow Command Script
+# Usage: ./send_workflow_cmd [device_id]
+
+set -e
+
+# Configuration (from environment)
+NANOHUB_HOST="${NANOHUB_HOST:-localhost:9004}"
+NANOHUB_USER="${NANOHUB_USER:-nanohub}"
+# NANOHUB_API_KEY is set from environment.sh
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Print colored output
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Get available workflows from NanoHUB
+get_workflows() {
+    # Return all known workflows with parameter info
+    echo "io.micromdm.wf.devinfolog.v1"       # Works - logs device info
+    echo "io.micromdm.wf.inventory.v1"        # Test - inventory collection  
+    echo "io.micromdm.wf.profile.v1"          # Test - requires context parameter
+    echo "io.micromdm.wf.fvenable.v1"         # Test - FileVault enable
+    echo "io.micromdm.wf.fvrotate.v1"         # Test - FileVault key rotation
+    echo "io.micromdm.wf.cmdplan.v1"          # Test - requires name parameter
+    echo "io.micromdm.wf.lock.v1"             # Works - requires passcode parameter
+    echo "io.micromdm.wf.certprof.v1"         # Test - requires profile parameter
+}
+
+# Display workflow menu
+show_workflow_menu() {
+    local workflows="$1"
+    echo
+    print_info "Available Workflows:"
+    echo "=================================="
+
+    local i=1
+    while IFS= read -r workflow; do
+        if [[ -n "$workflow" ]]; then
+            case "$workflow" in
+                "io.micromdm.wf.devinfolog.v1")
+                    printf "%2d) %s (Device info logging)\n" "$i" "$workflow"
+                    ;;
+                "io.micromdm.wf.inventory.v1")
+                    printf "%2d) %s (Inventory collection)\n" "$i" "$workflow"
+                    ;;
+                "io.micromdm.wf.profile.v1")
+                    printf "%2d) %s (Profile install - needs context)\n" "$i" "$workflow"
+                    ;;
+                "io.micromdm.wf.fvenable.v1")
+                    printf "%2d) %s (FileVault enable)\n" "$i" "$workflow"
+                    ;;
+                "io.micromdm.wf.fvrotate.v1")
+                    printf "%2d) %s (FileVault key rotation)\n" "$i" "$workflow"
+                    ;;
+                "io.micromdm.wf.cmdplan.v1")
+                    printf "%2d) %s (Command plan - needs name)\n" "$i" "$workflow"
+                    ;;
+                "io.micromdm.wf.lock.v1")
+                    printf "%2d) %s (Device lock - needs passcode)\n" "$i" "$workflow"
+                    ;;
+                "io.micromdm.wf.certprof.v1")
+                    printf "%2d) %s (Certificate profile - needs profile)\n" "$i" "$workflow"
+                    ;;
+                *)
+                    printf "%2d) %s\n" "$i" "$workflow"
+                    ;;
+            esac
+            ((i++))
+        fi
+    done <<< "$workflows"
+
+    echo "  0) Exit"
+    echo "=================================="
+}
+
+# Send workflow command with parameters
+send_workflow() {
+    local workflow="$1"
+    local device_id="$2"
+    local extra_params="$3"
+
+    print_info "Sending workflow: $workflow"
+    print_info "Device ID: $device_id"
+
+    local url="http://${NANOHUB_HOST}/api/v1/nanocmd/workflow/${workflow}/start?id=${device_id}${extra_params}"
+
+    # Send the workflow command
+    local response
+    response=$(curl -s -u "${NANOHUB_USER}:${NANOHUB_API_KEY}" \
+        -X POST \
+        "$url" 2>/dev/null)
+
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+        # Check if response contains error
+        if echo "$response" | grep -q '"error"'; then
+            print_error "Workflow failed:"
+            echo "$response" | jq -r '.error' 2>/dev/null || echo "$response"
+            return 1
+        else
+            print_success "Workflow started successfully!"
+            echo "$response" | jq . 2>/dev/null || echo "$response"
+            return 0
+        fi
+    else
+        print_error "Failed to connect to NanoHUB"
+        return 1
+    fi
+}
+
+# Handle workflow-specific parameters
+handle_workflow_parameters() {
+    local workflow="$1"
+    local device_id="$2"
+
+    case "$workflow" in
+        "io.micromdm.wf.devinfolog.v1")
+            print_info "Device info logging workflow - no parameters required"
+            send_workflow "$workflow" "$device_id"
+            ;;
+        "io.micromdm.wf.inventory.v1")
+            print_info "Inventory collection workflow - no parameters required"
+            send_workflow "$workflow" "$device_id"
+            ;;
+        "io.micromdm.wf.profile.v1")
+            echo
+            read -p "Enter profile context/name (required): " profile_context
+            if [[ -n "$profile_context" ]]; then
+                print_info "Using profile context: $profile_context"
+                send_workflow "$workflow" "$device_id" "&context=$profile_context"
+            else
+                print_error "Profile context is required!"
+                return 1
+            fi
+            ;;
+        "io.micromdm.wf.fvenable.v1")
+            print_info "FileVault Enable workflow - no parameters required"
+            send_workflow "$workflow" "$device_id"
+            ;;
+        "io.micromdm.wf.fvrotate.v1")
+            print_info "FileVault Rotate workflow - no parameters required"
+            send_workflow "$workflow" "$device_id"
+            ;;
+        "io.micromdm.wf.cmdplan.v1")
+            echo
+            read -p "Enter command plan name (required): " plan_name
+            if [[ -n "$plan_name" ]]; then
+                print_info "Using command plan: $plan_name"
+                send_workflow "$workflow" "$device_id" "&name=$plan_name"
+            else
+                print_error "Command plan name is required!"
+                return 1
+            fi
+            ;;
+        "io.micromdm.wf.lock.v1")
+            echo
+            read -p "Enter passcode for device lock (default: 3391): " passcode
+            passcode=${passcode:-3391}
+            print_info "Using passcode: $passcode"
+            send_workflow "$workflow" "$device_id" "&passcode=$passcode"
+            ;;
+        "io.micromdm.wf.certprof.v1")
+            echo
+            read -p "Enter profile name for certificate installation (required): " cert_profile
+            if [[ -n "$cert_profile" ]]; then
+                print_info "Using certificate profile: $cert_profile"
+                # CertProf uses JSON context, but we'll try simple parameter first
+                send_workflow "$workflow" "$device_id" "&profile=$cert_profile"
+            else
+                print_error "Certificate profile name is required!"
+                return 1
+            fi
+            ;;
+        *)
+            print_warning "Unknown workflow: $workflow"
+            print_info "Attempting to send without parameters..."
+            send_workflow "$workflow" "$device_id"
+            ;;
+    esac
+}
+
+# Check workflow status
+check_workflow_status() {
+    local device_id="$1"
+
+    print_info "Checking workflow status for device: $device_id"
+
+    # Query database for workflow status
+    mysql -h 127.0.0.1 -u nanohub -p"${DB_PASSWORD}" nanohub -e "
+        SELECT enrollment_id, workflow_name, created_at, updated_at
+        FROM wf_status
+        WHERE enrollment_id = '$device_id'
+        ORDER BY updated_at DESC
+        LIMIT 5;" 2>/dev/null || {
+        print_warning "Could not query workflow status from database"
+    }
+
+    # Also check recent commands
+    mysql -h 127.0.0.1 -u nanohub -p"${DB_PASSWORD}" nanohub -e "
+        SELECT command_uuid, request_type, created_at
+        FROM commands
+        WHERE created_at >= NOW() - INTERVAL 5 MINUTE
+        ORDER BY created_at DESC
+        LIMIT 3;" 2>/dev/null || {
+        print_warning "Could not query recent commands from database"
+    }
+}
+
+# Main function
+main() {
+    local device_id="$1"
+
+    # Check if device_id is provided
+    if [[ -z "$device_id" ]]; then
+        echo "Usage: $0 <device_id>"
+        echo "Example: $0 00008020-0001713C1E90003A"
+        exit 1
+    fi
+
+    # Validate device_id format (basic check)
+    if [[ ! "$device_id" =~ ^[A-F0-9-]+$ ]]; then
+        print_error "Invalid device ID format: $device_id"
+        print_info "Expected format: 00008020-0001713C1E90003A"
+        exit 1
+    fi
+
+    print_info "NanoHUB Workflow Manager"
+    print_info "Device ID: $device_id"
+    echo
+
+    # Get available workflows
+    local workflows
+    workflows=$(get_workflows)
+
+    if [[ -z "$workflows" ]]; then
+        print_error "No workflows available"
+        exit 1
+    fi
+
+    print_info "Fetching available workflows..."
+
+    # Interactive menu loop
+    while true; do
+        show_workflow_menu "$workflows"
+        echo
+        read -p "Select workflow (0-$(echo "$workflows" | wc -l)): " choice
+
+        case "$choice" in
+            0)
+                print_info "Exiting..."
+                exit 0
+                ;;
+            *)
+                # Validate choice is a number
+                if ! [[ "$choice" =~ ^[0-9]+$ ]]; then
+                    print_error "Invalid choice. Please enter a number."
+                    continue
+                fi
+
+                # Get selected workflow
+                local selected_workflow
+                selected_workflow=$(echo "$workflows" | sed -n "${choice}p")
+
+                if [[ -z "$selected_workflow" ]]; then
+                    print_error "Invalid selection: $choice"
+                    continue
+                fi
+
+                # Handle workflow with parameters
+                echo
+                if handle_workflow_parameters "$selected_workflow" "$device_id"; then
+                    echo
+                    read -p "Check workflow status? (y/n): " check_status
+                    if [[ "$check_status" =~ ^[Yy] ]]; then
+                        echo
+                        check_workflow_status "$device_id"
+                    fi
+                fi
+
+                echo
+                read -p "Send another workflow? (y/n): " continue_choice
+                if [[ ! "$continue_choice" =~ ^[Yy] ]]; then
+                    print_info "Exiting..."
+                    exit 0
+                fi
+                ;;
+        esac
+    done
+}
+
+# Check dependencies
+check_dependencies() {
+    local missing_deps=()
+
+    command -v curl >/dev/null 2>&1 || missing_deps+=("curl")
+    command -v mysql >/dev/null 2>&1 || missing_deps+=("mysql")
+    command -v jq >/dev/null 2>&1 || print_warning "jq not found - JSON output will be raw"
+
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        print_error "Missing dependencies: ${missing_deps[*]}"
+        exit 1
+    fi
+}
+
+# Run dependency check
+check_dependencies
+
+# Run main function
+main "$@"

@@ -1,0 +1,9 @@
+{
+    "Type": "com.apple.configuration.softwareupdate.settings",
+    "Identifier": "com.sloto.ddm.softwareupdate.ios",
+    "Payload": {
+        "AutomaticCheckEnabled": true,
+        "AutomaticDownloadEnabled": true,
+        "AutomaticallyInstallAppUpdates": true
+    }
+}

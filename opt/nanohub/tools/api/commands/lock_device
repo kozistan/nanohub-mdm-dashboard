@@ -1,0 +1,63 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+# device_lock.sh - Lock device immediately
+# Usage: ./device_lock.sh <UDID> [PIN] [Message]
+
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <UDID> [PIN] [Message]"
+    echo "Example: $0 00008020-0001713C1E90003A"
+    echo "Example: $0 00008020-0001713C1E90003A 123456 'Device locked by admin'"
+    exit 1
+fi
+
+UDID="$1"
+PIN="$2"
+MESSAGE="${3:-Device has been locked by administrator}"
+
+CMD_UUID=$(uuidgen)
+
+# Vytvoř DeviceLock command (unique temp file for parallel execution)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+cat > "$TEMP_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>DeviceLock</string>
+        <key>Message</key>
+        <string>$MESSAGE</string>
+$(if [ -n "$PIN" ]; then echo "        <key>PIN</key>"; echo "        <string>$PIN</string>"; fi)
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
+echo "Locking device: $UDID"
+if [ -n "$PIN" ]; then
+    echo "PIN: $PIN"
+fi
+echo "Message: $MESSAGE"
+echo "Command UUID: $CMD_UUID"
+
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+rm -f "$TEMP_PLIST"
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "Device lock command sent successfully!"
+else
+    echo "Failed to send device lock command (HTTP: $HTTP_CODE)"
+    echo "Response: $BODY"
+fi

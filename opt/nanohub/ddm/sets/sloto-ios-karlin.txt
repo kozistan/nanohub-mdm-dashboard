@@ -1,0 +1,6 @@
+# DDM Set: iOS Karlin
+# Declarations to include in this set
+com.sloto.ddm.org-info
+com.sloto.ddm.passcode
+com.sloto.ddm.softwareupdate.ios
+com.sloto.ddm.activation.ios

@@ -1,0 +1,10 @@
+{
+    "Type": "com.apple.configuration.passcode.settings",
+    "Identifier": "com.sloto.ddm.passcode",
+    "Payload": {
+        "MinimumLength": 8,
+        "RequireComplexPasscode": true,
+        "MaximumFailedAttempts": 10,
+        "MinutesUntilFailedLoginReset": 15
+    }
+}

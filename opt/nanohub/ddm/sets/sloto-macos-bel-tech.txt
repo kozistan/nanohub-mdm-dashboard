@@ -1,0 +1,7 @@
+# DDM Set: macOS Belehradska Tech
+# Declarations to include in this set (no FileVault)
+com.sloto.ddm.org-info
+com.sloto.ddm.passcode
+com.sloto.ddm.softwareupdate.macos
+com.sloto.ddm.screensharing
+com.sloto.ddm.activation.macos-bel

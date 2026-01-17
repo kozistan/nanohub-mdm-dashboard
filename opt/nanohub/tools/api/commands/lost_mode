@@ -1,0 +1,81 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+#
+# NanoHUB Enable/Disable Lost Mode Script
+#
+# Description:
+# This script sends EnableLostMode or DisableLostMode MDM commands to an iOS device using NanoMDM API,
+# depending on the provided action parameter.
+#
+# Usage:
+#   ./lost_mode.sh <enable|disable> <UDID>
+#
+# Parameters:
+#   <enable|disable> - Action to perform: "enable" to activate Lost Mode, "disable" to deactivate Lost Mode.
+#   <UDID>           - Unique Device Identifier of the target device.
+#
+# Example:
+#   ./lost_mode.sh enable 12345678-90AB-CDEF-1234-567890ABCDEF
+#   ./lost_mode.sh disable 12345678-90AB-CDEF-1234-567890ABCDEF
+#
+# Requirements:
+#   - NanoMDM API running at http://localhost:9004
+#   - Proper authentication configured in the curl command below
+#
+
+if [ "$#" -ne 2 ]; then
+  echo "Usage: $0 <enable|disable> <UDID>"
+  exit 1
+fi
+
+ACTION="$1"
+UDID="$2"
+
+if [ "$ACTION" == "enable" ]; then
+  REQUEST_TYPE="EnableLostMode"
+elif [ "$ACTION" == "disable" ]; then
+  REQUEST_TYPE="DisableLostMode"
+else
+  echo "Invalid action: $ACTION"
+  echo "Use 'enable' or 'disable'"
+  exit 1
+fi
+
+CMD_UUID=$(uuidgen)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+
+cat > "$TEMP_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Command</key>
+  <dict>
+    <key>RequestType</key>
+    <string>$REQUEST_TYPE</string>
+    $( [ "$ACTION" == "enable" ] && echo "    <key>Message</key><string>This device has been lost. Please contact the owner at the phone number below.</string><key>PhoneNumber</key><string>+420123456789</string>" )
+  </dict>
+  <key>CommandUUID</key>
+  <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+rm -f "$TEMP_PLIST"
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "$REQUEST_TYPE command sent successfully!"
+else
+    echo "Failed to send $REQUEST_TYPE command (HTTP: $HTTP_CODE)"
+    echo "Response: $BODY"
+    exit 1
+fi

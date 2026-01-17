@@ -1,0 +1,143 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+# Bulk remove VPP apps listed in apps.json - NanoHUB version
+# Requires: apps.json with format {"apps": [ { "adamId", "bundleId", "name" }, ... ]}
+# Prompts for UDID and SerialNumber
+set -euo pipefail
+
+read -p "Enter device UDID: " UDID
+read -p "Enter device serial number: " SERIAL
+
+APPS_JSON="/home/microm/nanohub/data/apps_ios.json"
+
+if [[ ! -f "$APPS_JSON" ]]; then
+    echo "[ERROR] $APPS_JSON not found."
+    echo "Please create the file with format:"
+    echo '{"apps": [{"adamId": "422689480", "bundleId": "com.google.Gmail", "name": "Gmail"}]}'
+    exit 1
+fi
+
+# VPP Token - check environment or config
+if [[ -z "${VPP_TOKEN:-}" ]]; then
+    # Try to load from file
+    if [ -f "/home/microm/nanohub/vpp/vpp_token.txt" ]; then
+        VPP_TOKEN=$(cat /home/microm/nanohub/vpp/vpp_token.txt)
+    else
+        echo "[ERROR] VPP_TOKEN is not set."
+        echo "Set environment variable: export VPP_TOKEN='your_token'"
+        echo "Or create file: /home/microm/nanohub/vpp/vpp_token.txt"
+        exit 1
+    fi
+fi
+
+echo "[INFO] Starting bulk removal of VPP apps from $APPS_JSON..."
+echo "Target device UDID: $UDID"
+echo "Target device serial: $SERIAL"
+echo ""
+
+APP_COUNT=$(jq '.apps | length' "$APPS_JSON")
+echo "[INFO] Found $APP_COUNT apps to remove"
+echo ""
+
+SUCCESSFUL_REMOVALS=0
+FAILED_REMOVALS=0
+
+for i in $(seq 0 $((APP_COUNT - 1))); do
+    ADAM_ID=$(jq -r ".apps[$i].adamId" "$APPS_JSON")
+    BUNDLE_ID=$(jq -r ".apps[$i].bundleId" "$APPS_JSON")
+    NAME=$(jq -r ".apps[$i].name" "$APPS_JSON")
+    
+    if [[ "$ADAM_ID" == "null" || "$BUNDLE_ID" == "null" || "$NAME" == "null" ]]; then
+        echo "[WARNING] Skipping app at index $i due to missing fields."
+        FAILED_REMOVALS=$((FAILED_REMOVALS + 1))
+        continue
+    fi
+    
+    echo "[$((i+1))/$APP_COUNT] Processing: $NAME ($BUNDLE_ID, adamId=$ADAM_ID)"
+    
+    # Step 1: Unassign VPP license
+    echo "  [1/2] Unassigning VPP license..."
+    VPP_PAYLOAD=$(jq -n \
+        --arg adamId "$ADAM_ID" \
+        --arg serial "$SERIAL" \
+        '{
+            assets: [ { adamId: $adamId } ],
+            serialNumbers: [ $serial ]
+        }')
+    
+    VPP_RESPONSE=$(curl -sS -X POST \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $VPP_TOKEN" \
+        -d "$VPP_PAYLOAD" \
+        https://vpp.itunes.apple.com/mdm/v2/assets/disassociate)
+    
+    # Check for VPP errors (but don't fail - app might not have license)
+    if echo "$VPP_RESPONSE" | jq -e '.errorMessage' > /dev/null; then
+        echo "  [WARNING] VPP License disassociation had issues for $NAME:"
+        echo "$VPP_RESPONSE" | jq .
+        echo "  Continuing with app removal..."
+    else
+        echo "  [OK] License unassigned for $NAME"
+    fi
+    
+    # Step 2: Send RemoveApplication command
+    echo "  [2/2] Sending RemoveApplication command..."
+    
+    # Generate command UUID
+    CMD_UUID=$(uuidgen)
+    
+    # Create RemoveApplication command for NanoMDM
+    cat > /tmp/bulk_remove_${i}.plist << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>RemoveApplication</string>
+        <key>Identifier</key>
+        <string>$BUNDLE_ID</string>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+    
+    # Send RemoveApplication command to NanoMDM
+    RESPONSE=$(curl -s -T /tmp/bulk_remove_${i}.plist \
+        -u "nanohub:${NANOHUB_API_KEY}" \
+        -w "HTTP_CODE:%{http_code}" \
+        "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+    
+    HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+    
+    if [ "$HTTP_CODE" = "200" ]; then
+        echo "  [OK] RemoveApplication command sent for $NAME"
+        SUCCESSFUL_REMOVALS=$((SUCCESSFUL_REMOVALS + 1))
+    else
+        echo "  [ERROR] Failed to send RemoveApplication command for $NAME (HTTP: $HTTP_CODE)"
+        echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//'
+        FAILED_REMOVALS=$((FAILED_REMOVALS + 1))
+    fi
+    
+    # Cleanup temp file
+    rm -f /tmp/bulk_remove_${i}.plist
+    
+    echo ""
+    
+    # Small delay to avoid overwhelming the device
+    sleep 2
+done
+
+echo "========================================"
+echo "[INFO] Bulk VPP app removal complete!"
+echo "========================================"
+echo "Successful removals: $SUCCESSFUL_REMOVALS"
+echo "Failed removals: $FAILED_REMOVALS"
+echo "Total apps processed: $APP_COUNT"
+echo ""
+echo "Monitor removals with:"
+echo "tail -f /var/log/nanohub/webhook.log | grep -E '(RemoveApplication|app|Acknowledged)'"

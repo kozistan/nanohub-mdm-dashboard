@@ -1,0 +1,249 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+
+# Clear MDM Queue Script
+# Usage: ./clear_queue [UUID] [--auto]
+#        --auto  Non-interactive mode, clears queue only (keeps command history)
+
+DB_HOST="${DB_HOST:-127.0.0.1}"
+DB_USER="${DB_USER:-nanohub}"
+DB_PASS="${DB_PASSWORD}"
+DB_NAME="${DB_NAME:-nanohub}"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Check for --auto flag
+AUTO_MODE=false
+UUID=""
+for arg in "$@"; do
+    if [ "$arg" = "--auto" ] || [ "$arg" = "-y" ] || [ "$arg" = "--yes" ]; then
+        AUTO_MODE=true
+    elif [ -z "$UUID" ]; then
+        UUID="$arg"
+    fi
+done
+
+# MySQL connection function
+mysql_query() {
+    mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "$1"
+}
+
+# Get UUID from parameter or prompt
+if [ -z "$UUID" ]; then
+    echo -e "${BLUE}Enter device UUID:${NC}"
+    read UUID
+fi
+
+echo -e "${BLUE}=== CLEAR MDM QUEUE for UUID: $UUID ===${NC}"
+echo
+
+# Check if device exists and show info
+echo -e "${YELLOW}Checking device...${NC}"
+DEVICE_INFO=$(mysql_query "
+SELECT 
+    d.id as device_uuid,
+    d.serial_number,
+    e.enabled,
+    e.last_seen_at
+FROM devices d
+LEFT JOIN enrollments e ON d.id = e.device_id
+WHERE d.id = '$UUID';")
+
+if [ -z "$DEVICE_INFO" ] || [ "$(echo "$DEVICE_INFO" | wc -l)" -eq 1 ]; then
+    echo -e "${RED}Device not found!${NC}"
+    exit 1
+fi
+
+echo "$DEVICE_INFO"
+echo
+
+# Count pending commands
+QUEUE_COUNT=$(mysql_query "SELECT COUNT(*) as count FROM enrollment_queue WHERE id = '$UUID';" | tail -n1)
+COMMAND_COUNT=$(mysql_query "
+SELECT COUNT(*) as count 
+FROM commands c 
+JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid 
+WHERE eq.id = '$UUID';" | tail -n1)
+
+echo -e "${YELLOW}Current queue status:${NC}"
+echo "Queue entries: $QUEUE_COUNT"
+echo "Commands in queue: $COMMAND_COUNT"
+echo
+
+if [ "$QUEUE_COUNT" -eq 0 ]; then
+    echo -e "${GREEN}No commands in queue - nothing to clear!${NC}"
+    exit 0
+fi
+
+# AUTO MODE - clear queue only without prompting
+if [ "$AUTO_MODE" = true ]; then
+    echo -e "${BLUE}Auto mode: Clearing queue only (keeping command history)...${NC}"
+    mysql_query "DELETE FROM enrollment_queue WHERE id = '$UUID';"
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Queue cleared successfully! ($QUEUE_COUNT entries removed)${NC}"
+        exit 0
+    else
+        echo -e "${RED}Error clearing queue!${NC}"
+        exit 1
+    fi
+fi
+
+# Show sample of pending commands
+echo -e "${YELLOW}Sample of pending commands:${NC}"
+mysql_query "
+SELECT 
+    c.request_type,
+    c.created_at,
+    eq.active,
+    eq.priority
+FROM commands c
+JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+WHERE eq.id = '$UUID'
+ORDER BY c.created_at DESC
+LIMIT 5;"
+echo
+
+# Menu for deletion options
+echo -e "${BLUE}Select what to clear:${NC}"
+echo "1) Clear only queue (keep commands history)"
+echo "2) Clear queue + commands (remove all traces)" 
+echo "3) Show more details first"
+echo "0) Cancel"
+echo
+echo -n "Choice: "
+read choice
+
+case $choice in
+    1)
+        echo
+        echo -e "${YELLOW}This will clear the queue but keep commands in database for audit.${NC}"
+        echo -e "${YELLOW}Device will stop receiving these $QUEUE_COUNT pending commands.${NC}"
+        echo -n "Continue? (y/N): "
+        read confirm
+        
+        if [[ $confirm =~ ^[Yy]$ ]]; then
+            echo -e "${BLUE}Clearing queue only...${NC}"
+            
+            # Create backup info
+            echo "Creating backup info..."
+            BACKUP_FILE="queue_backup_${UUID}_$(date +%Y%m%d_%H%M%S).sql"
+            echo "-- Backup of queue for $UUID at $(date)" > "$BACKUP_FILE"
+            mysql_query "SELECT * FROM enrollment_queue WHERE id = '$UUID';" >> "$BACKUP_FILE"
+            echo "Backup saved to: $BACKUP_FILE"
+            
+            # Clear queue only
+            mysql_query "DELETE FROM enrollment_queue WHERE id = '$UUID';"
+            
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✓ Queue cleared successfully!${NC}"
+                echo "Commands history preserved in database."
+            else
+                echo -e "${RED}✗ Error clearing queue!${NC}"
+                exit 1
+            fi
+        else
+            echo "Cancelled."
+        fi
+        ;;
+        
+    2)
+        echo
+        echo -e "${RED}WARNING: This will permanently delete queue AND commands!${NC}"
+        echo -e "${RED}You will lose all history of these $COMMAND_COUNT commands.${NC}"
+        echo -n "Are you absolutely sure? (type 'DELETE' to confirm): "
+        read confirm
+        
+        if [ "$confirm" = "DELETE" ]; then
+            echo -e "${BLUE}Creating full backup...${NC}"
+            
+            # Create full backup
+            BACKUP_FILE="full_backup_${UUID}_$(date +%Y%m%d_%H%M%S).sql"
+            echo "-- Full backup for $UUID at $(date)" > "$BACKUP_FILE"
+            echo "-- Queue data:" >> "$BACKUP_FILE"
+            mysql_query "SELECT * FROM enrollment_queue WHERE id = '$UUID';" >> "$BACKUP_FILE"
+            echo "-- Commands data:" >> "$BACKUP_FILE"
+            mysql_query "
+            SELECT c.* FROM commands c 
+            JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid 
+            WHERE eq.id = '$UUID';" >> "$BACKUP_FILE"
+            echo "-- Command results:" >> "$BACKUP_FILE"
+            mysql_query "
+            SELECT cr.* FROM command_results cr
+            JOIN commands c ON cr.command_uuid = c.command_uuid
+            JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid 
+            WHERE eq.id = '$UUID';" >> "$BACKUP_FILE"
+            echo "Full backup saved to: $BACKUP_FILE"
+            
+            echo -e "${BLUE}Deleting queue and commands...${NC}"
+            
+            # Delete queue and commands
+            mysql_query "
+            DELETE eq, c FROM enrollment_queue eq 
+            JOIN commands c ON eq.command_uuid = c.command_uuid 
+            WHERE eq.id = '$UUID';"
+            
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✓ Queue and commands deleted successfully!${NC}"
+                echo "Full backup available at: $BACKUP_FILE"
+            else
+                echo -e "${RED}✗ Error during deletion!${NC}"
+                exit 1
+            fi
+        else
+            echo "Cancelled - wrong confirmation."
+        fi
+        ;;
+        
+    3)
+        echo
+        echo -e "${BLUE}=== DETAILED QUEUE ANALYSIS ===${NC}"
+        echo
+        echo -e "${YELLOW}Commands by type:${NC}"
+        mysql_query "
+        SELECT 
+            c.request_type,
+            COUNT(*) as count,
+            MIN(c.created_at) as oldest,
+            MAX(c.created_at) as newest
+        FROM commands c
+        JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+        WHERE eq.id = '$UUID'
+        GROUP BY c.request_type
+        ORDER BY count DESC;"
+        
+        echo
+        echo -e "${YELLOW}Oldest pending commands:${NC}"
+        mysql_query "
+        SELECT 
+            c.request_type,
+            c.created_at,
+            TIMESTAMPDIFF(HOUR, c.created_at, NOW()) as hours_old
+        FROM commands c
+        JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+        WHERE eq.id = '$UUID'
+        ORDER BY c.created_at ASC
+        LIMIT 10;"
+        
+        echo
+        echo "Run script again to clear the queue."
+        ;;
+        
+    0)
+        echo "Cancelled."
+        exit 0
+        ;;
+        
+    *)
+        echo -e "${RED}Invalid choice.${NC}"
+        exit 1
+        ;;
+esac
+
+echo
+echo -e "${GREEN}Done!${NC}"

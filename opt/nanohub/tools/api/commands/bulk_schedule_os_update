@@ -1,0 +1,340 @@
+#!/bin/bash
+# NanoHUB Bulk Schedule OS Update with Platform-Specific Parameters
+# Behavior change:
+# - If ONLY iOS-specific options are provided, run on iOS devices only.
+# - If ONLY macOS-specific options are provided, run on macOS devices only.
+# - If both platforms' options are provided (or none), run on both.
+# - You can also force a platform with --only-ios / --only-macos.
+#
+# Usage: ./bulk_schedule_os_update <DEVICES_JSON> <ACTION> [OPTIONS]
+
+set -u
+
+function help() {
+    cat >&2 <<-HELP_EOF
+Usage: $0 <ACTION> [OPTIONS]
+
+Positional arguments:
+  ACTION                  Install action (required)
+
+Install Actions:
+  Default                Use default system behavior
+  DownloadOnly           Download update but don't install
+  InstallASAP            Install immediately
+  NotifyOnly             Notify user but don't auto-install
+  InstallLater           Schedule for later installation
+  InstallForceRestart    Force restart after installation
+
+Global Options:
+  -h, --help             Show this help message
+  --devices UDIDS        Comma-separated list of device UDIDs (empty = all)
+  --manifest MAN         Filter by manifest
+  --account ACC          Filter by account status (enabled, disabled)
+  --dry-run              Show what would be executed without running
+  --only-ios             Force targeting iOS devices only
+  --only-macos           Force targeting macOS devices only
+
+iOS Specific Options:
+  --ios-key KEY          Product key for iOS updates
+  --ios-version VER      Product version for iOS
+  --ios-deferrals NUM    Maximum user deferrals for iOS
+  --ios-priority PRI     Priority for iOS (Low, High)
+
+macOS Specific Options:
+  --macos-key KEY        Product key for macOS updates
+  --macos-version VER    Product version for macOS
+  --macos-deferrals NUM  Maximum user deferrals for macOS
+  --macos-priority PRI   Priority for macOS (Low, High)
+
+Auto platform filtering:
+  If you provide ONLY iOS options, devices are filtered to iOS.
+  If you provide ONLY macOS options, devices are filtered to macOS.
+  If you provide both (or none), no OS filter is applied.
+  --only-ios / --only-macos override the auto behavior.
+
+Examples:
+  $0 DownloadOnly --ios-key "iOS16.7"
+  $0 InstallASAP --macos-key "macOS14.1" --only-macos
+  $0 InstallLater --ios-deferrals 3 --macos-deferrals 1
+  $0 NotifyOnly --manifest tech --dry-run
+HELP_EOF
+    exit 1
+}
+
+# Check minimum arguments
+if [ $# -lt 1 ]; then
+    help
+fi
+
+ACTION="$1"
+shift 1
+
+# Source environment variables for DB credentials
+if [[ -f /home/microm/nanohub/environment.sh ]]; then
+  source /home/microm/nanohub/environment.sh
+else
+  echo "[ERROR] /home/microm/nanohub/environment.sh not found!"
+  exit 1
+fi
+
+# Init global vars
+MANIFEST_FILTER=""
+ACCOUNT_FILTER=""
+DRY_RUN=false
+AUTO_CONFIRM=false    # skip interactive confirmation
+OS_FILTER=""          # "", "ios", or "macos"
+OS_FILTER_FORCED=false
+SELECTED_DEVICES=""   # comma-separated list of UDIDs (empty = all)
+
+# Init iOS specific vars
+IOS_VERSION=""
+IOS_DEFERRALS=""
+IOS_PRIORITY=""
+IOS_KEY=""
+IOS_OPTS_SET=false
+
+# Init macOS specific vars
+MACOS_VERSION=""
+MACOS_DEFERRALS=""
+MACOS_PRIORITY=""
+MACOS_KEY=""
+MACOS_OPTS_SET=false
+
+# Parse optional args
+while [ $# -gt 0 ]; do
+    case $1 in
+        -h|--help) help ;;
+        --manifest) MANIFEST_FILTER="$2"; shift 2 ;;
+        --account) ACCOUNT_FILTER="$2"; shift 2 ;;
+        --dry-run) DRY_RUN=true; shift ;;
+        --yes|-y) AUTO_CONFIRM=true; shift ;;
+        --devices) SELECTED_DEVICES="$2"; shift 2 ;;
+
+        --only-ios)   OS_FILTER="ios";   OS_FILTER_FORCED=true; shift ;;
+        --only-macos) OS_FILTER="macos"; OS_FILTER_FORCED=true; shift ;;
+
+        # iOS specific
+        --ios-version)   IOS_VERSION="$2";   IOS_OPTS_SET=true; shift 2 ;;
+        --ios-deferrals) IOS_DEFERRALS="$2"; IOS_OPTS_SET=true; shift 2 ;;
+        --ios-priority)  IOS_PRIORITY="$2";  IOS_OPTS_SET=true; shift 2 ;;
+        --ios-key)       IOS_KEY="$2";       IOS_OPTS_SET=true; shift 2 ;;
+
+        # macOS specific
+        --macos-version)   MACOS_VERSION="$2";   MACOS_OPTS_SET=true; shift 2 ;;
+        --macos-deferrals) MACOS_DEFERRALS="$2"; MACOS_OPTS_SET=true; shift 2 ;;
+        --macos-priority)  MACOS_PRIORITY="$2";  MACOS_OPTS_SET=true; shift 2 ;;
+        --macos-key)       MACOS_KEY="$2";       MACOS_OPTS_SET=true; shift 2 ;;
+
+        *) echo "[ERROR] Unknown option: $1"; help ;;
+    esac
+done
+
+# Validate action
+case "$ACTION" in
+    Default|DownloadOnly|InstallASAP|NotifyOnly|InstallLater|InstallForceRestart) ;;
+    *) echo "[ERROR] Invalid InstallAction: $ACTION"; exit 1 ;;
+esac
+
+# Validate iOS priority
+if [ -n "$IOS_PRIORITY" ]; then
+    case "$IOS_PRIORITY" in Low|High) ;; *) echo "[ERROR] Invalid iOS Priority: $IOS_PRIORITY"; exit 1 ;; esac
+fi
+
+# Validate macOS priority
+if [ -n "$MACOS_PRIORITY" ]; then
+    case "$MACOS_PRIORITY" in Low|High) ;; *) echo "[ERROR] Invalid macOS Priority: $MACOS_PRIORITY"; exit 1 ;; esac
+fi
+
+# Validate account filter
+if [ -n "$ACCOUNT_FILTER" ]; then
+    case "$ACCOUNT_FILTER" in enabled|disabled) ;; *) echo "[ERROR] Invalid account filter: $ACCOUNT_FILTER"; exit 1 ;; esac
+fi
+
+# Auto OS filter if not forced:
+# - Only iOS options set -> ios
+# - Only macOS options set -> macos
+# - Both or none -> no filter
+if [ "$OS_FILTER_FORCED" = false ]; then
+    if [ "$IOS_OPTS_SET" = true ] && [ "$MACOS_OPTS_SET" = false ]; then
+        OS_FILTER="ios"
+    elif [ "$MACOS_OPTS_SET" = true ] && [ "$IOS_OPTS_SET" = false ]; then
+        OS_FILTER="macos"
+    else
+        OS_FILTER=""
+    fi
+fi
+
+# Build SQL query with filters
+SQL_WHERE="WHERE 1=1"
+if [ -n "$SELECTED_DEVICES" ]; then
+    # Convert comma-separated UDIDs to SQL IN clause
+    UDID_LIST=$(echo "$SELECTED_DEVICES" | sed "s/,/','/g")
+    SQL_WHERE="$SQL_WHERE AND uuid IN ('$UDID_LIST')"
+fi
+if [ -n "$MANIFEST_FILTER" ]; then
+    SQL_WHERE="$SQL_WHERE AND manifest='$MANIFEST_FILTER'"
+fi
+if [ -n "$ACCOUNT_FILTER" ]; then
+    SQL_WHERE="$SQL_WHERE AND account='$ACCOUNT_FILTER'"
+fi
+if [ -n "$OS_FILTER" ]; then
+    SQL_WHERE="$SQL_WHERE AND os='$OS_FILTER'"
+fi
+
+# Get devices after all filters applied
+DEVICES=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -sN -e "SELECT CONCAT(uuid, '|', hostname, '|', os, '|', manifest, '|', account) FROM device_inventory $SQL_WHERE ORDER BY hostname" 2>/dev/null)
+
+if [ -z "$DEVICES" ]; then
+    echo "[ERROR] No devices match the specified filters"
+    exit 1
+fi
+
+# Count devices by OS in the filtered set
+IOS_COUNT=$(echo "$DEVICES" | grep -c "|ios|" || true)
+MACOS_COUNT=$(echo "$DEVICES" | grep -c "|macos|" || true)
+
+echo "================================================================"
+echo "BULK OS UPDATE SCHEDULE - PLATFORM SPECIFIC"
+echo "================================================================"
+echo "Action: $ACTION"
+[ -n "$SELECTED_DEVICES" ] && echo "Selected Devices: $(echo $SELECTED_DEVICES | tr ',' ' ' | wc -w) device(s)"
+[ -n "$MANIFEST_FILTER" ] && echo "Manifest Filter: $MANIFEST_FILTER"
+[ -n "$ACCOUNT_FILTER" ] && echo "Account Filter: $ACCOUNT_FILTER"
+[ -n "$OS_FILTER" ] && echo "OS Filter: $OS_FILTER"
+echo ""
+
+if [ $IOS_COUNT -gt 0 ]; then
+    echo "iOS Devices ($IOS_COUNT):"
+    [ -n "$IOS_VERSION" ] && echo "  Product Version: $IOS_VERSION"
+    [ -n "$IOS_KEY" ] && echo "  Product Key: $IOS_KEY"
+    [ -n "$IOS_PRIORITY" ] && echo "  Priority: $IOS_PRIORITY"
+    [ -n "$IOS_DEFERRALS" ] && echo "  Max Deferrals: $IOS_DEFERRALS"
+    echo ""
+fi
+
+if [ $MACOS_COUNT -gt 0 ]; then
+    echo "macOS Devices ($MACOS_COUNT):"
+    [ -n "$MACOS_VERSION" ] && echo "  Product Version: $MACOS_VERSION"
+    [ -n "$MACOS_KEY" ] && echo "  Product Key: $MACOS_KEY"
+    [ -n "$MACOS_PRIORITY" ] && echo "  Priority: $MACOS_PRIORITY"
+    [ -n "$MACOS_DEFERRALS" ] && echo "  Max Deferrals: $MACOS_DEFERRALS"
+    echo ""
+fi
+
+echo "Target devices:"
+echo "----------------------------------------------------------------"
+printf "%-40s %-15s %-8s %-12s %s\n" "UUID" "HOSTNAME" "OS" "MANIFEST" "ACCOUNT"
+echo "----------------------------------------------------------------"
+
+DEVICE_COUNT=0
+while IFS='|' read -r uuid hostname os manifest account; do
+    [ -z "$uuid" ] && continue
+    printf "%-40s %-15s %-8s %-12s %s\n" "$uuid" "$hostname" "$os" "$manifest" "$account"
+    ((DEVICE_COUNT++))
+done <<< "$DEVICES"
+
+echo "----------------------------------------------------------------"
+echo "Total devices: $DEVICE_COUNT (iOS: $IOS_COUNT, macOS: $MACOS_COUNT)"
+echo ""
+
+if [ "$DRY_RUN" = true ]; then
+    echo "[DRY-RUN] Commands that would be executed:"
+    echo ""
+    while IFS='|' read -r uuid hostname os manifest account; do
+        [ -z "$uuid" ] && continue
+
+        CMD="/opt/nanohub/tools/api/commands/schedule_os_update $uuid $ACTION"
+
+        # Add platform-specific parameters
+        if [ "$os" = "ios" ]; then
+            [ -n "$IOS_VERSION" ] && CMD="$CMD --version $IOS_VERSION"
+            [ -n "$IOS_KEY" ] && CMD="$CMD --key $IOS_KEY"
+            [ -n "$IOS_PRIORITY" ] && CMD="$CMD --priority $IOS_PRIORITY"
+            [ -n "$IOS_DEFERRALS" ] && CMD="$CMD --deferrals $IOS_DEFERRALS"
+        elif [ "$os" = "macos" ]; then
+            [ -n "$MACOS_VERSION" ] && CMD="$CMD --version $MACOS_VERSION"
+            [ -n "$MACOS_KEY" ] && CMD="$CMD --key $MACOS_KEY"
+            [ -n "$MACOS_PRIORITY" ] && CMD="$CMD --priority $MACOS_PRIORITY"
+            [ -n "$MACOS_DEFERRALS" ] && CMD="$CMD --deferrals $MACOS_DEFERRALS"
+        fi
+
+        echo "$CMD  # $hostname ($os)"
+    done <<< "$DEVICES"
+    exit 0
+fi
+
+# Interactive confirmation with platform summary
+echo "Summary:"
+if [ $IOS_COUNT -gt 0 ]; then
+    echo "  iOS devices: $IOS_COUNT"
+    PARAMS=""
+    [ -n "$IOS_KEY" ] && PARAMS="$PARAMS key:$IOS_KEY"
+    [ -n "$IOS_VERSION" ] && PARAMS="$PARAMS ver:$IOS_VERSION"
+    [ -n "$IOS_PRIORITY" ] && PARAMS="$PARAMS pri:$IOS_PRIORITY"
+    [ -n "$IOS_DEFERRALS" ] && PARAMS="$PARAMS def:$IOS_DEFERRALS"
+    [ -n "$PARAMS" ] && echo "    Parameters:$PARAMS"
+fi
+
+if [ $MACOS_COUNT -gt 0 ]; then
+    echo "  macOS devices: $MACOS_COUNT"
+    PARAMS=""
+    [ -n "$MACOS_KEY" ] && PARAMS="$PARAMS key:$MACOS_KEY"
+    [ -n "$MACOS_VERSION" ] && PARAMS="$PARAMS ver:$MACOS_VERSION"
+    [ -n "$MACOS_PRIORITY" ] && PARAMS="$PARAMS pri:$MACOS_PRIORITY"
+    [ -n "$MACOS_DEFERRALS" ] && PARAMS="$PARAMS def:$MACOS_DEFERRALS"
+    [ -n "$PARAMS" ] && echo "    Parameters:$PARAMS"
+fi
+
+echo ""
+if [ "$AUTO_CONFIRM" = false ]; then
+    read -p "Proceed with OS update scheduling for $DEVICE_COUNT devices? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo "Aborted"
+        exit 0
+    fi
+else
+    echo "[AUTO] Proceeding with OS update scheduling for $DEVICE_COUNT devices..."
+fi
+
+echo ""
+echo "Executing OS update commands in parallel..."
+echo "================================================================"
+
+# Parallel execution - all commands run simultaneously
+while IFS='|' read -r uuid hostname os manifest account; do
+    [ -z "$uuid" ] && continue
+
+    echo "[$(date '+%H:%M:%S')] Sending to: $hostname ($uuid, $os)"
+
+    # Build platform-specific command
+    CMD_ARGS="$uuid $ACTION"
+
+    if [ "$os" = "ios" ]; then
+        [ -n "$IOS_VERSION" ] && CMD_ARGS="$CMD_ARGS --version $IOS_VERSION"
+        [ -n "$IOS_KEY" ] && CMD_ARGS="$CMD_ARGS --key $IOS_KEY"
+        [ -n "$IOS_PRIORITY" ] && CMD_ARGS="$CMD_ARGS --priority $IOS_PRIORITY"
+        [ -n "$IOS_DEFERRALS" ] && CMD_ARGS="$CMD_ARGS --deferrals $IOS_DEFERRALS"
+    elif [ "$os" = "macos" ]; then
+        [ -n "$MACOS_VERSION" ] && CMD_ARGS="$CMD_ARGS --version $MACOS_VERSION"
+        [ -n "$MACOS_KEY" ] && CMD_ARGS="$CMD_ARGS --key $MACOS_KEY"
+        [ -n "$MACOS_PRIORITY" ] && CMD_ARGS="$CMD_ARGS --priority $MACOS_PRIORITY"
+        [ -n "$MACOS_DEFERRALS" ] && CMD_ARGS="$CMD_ARGS --deferrals $MACOS_DEFERRALS"
+    fi
+
+    # Execute command in background
+    /opt/nanohub/tools/api/commands/schedule_os_update $CMD_ARGS &
+done <<< "$DEVICES"
+
+# Wait for all background jobs to complete
+wait
+
+echo ""
+echo "================================================================"
+echo "BULK OPERATION COMPLETE"
+echo "================================================================"
+echo "Total devices: $DEVICE_COUNT (iOS: $IOS_COUNT, macOS: $MACOS_COUNT)"
+echo "All commands sent in parallel"
+echo ""
+echo "Monitor progress with:"
+echo "  tail -f /var/log/nanohub/webhook.log | grep -E \"(ScheduleOSUpdate|OSUpdateStatus)\""
+echo "================================================================"

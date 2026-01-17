@@ -1,0 +1,124 @@
+#!/bin/bash
+set -euo pipefail
+BASE_DIR="/home/microm/nanohub/profiles/wireguard_configs"
+find "$BASE_DIR" -type f -iname '*.conf' | while IFS= read -r conf; do
+    filename=$(basename "$conf")
+    name="${filename%.conf}"
+    output_dir=$(dirname "$conf")
+    # NOTE: To revert to iOS-only On-Demand, change regex to: if [[ "$conf" =~ /ios/ ]]; then
+    if [[ "$conf" =~ /ios/ ]]; then
+        PLATFORM="ios"
+        VPNSUBTYPE="com.wireguard.ios"
+        ONDEMAND_BLOCK=$(cat <<EOD
+      <key>OnDemandEnabled</key>
+      <integer>1</integer>
+      <key>OnDemandRules</key>
+      <array>
+        <dict>
+          <key>Action</key>
+          <string>Disconnect</string>
+          <key>SSIDMatch</key>
+          <array>
+            <string>Slote-G</string>
+            <string>Slote-Guest</string>
+            <string>Slote-Service</string>
+          </array>
+        </dict>
+        <dict>
+          <key>Action</key>
+          <string>Connect</string>
+        </dict>
+      </array>
+EOD
+)
+    elif [[ "$conf" =~ /macos/ ]]; then
+        PLATFORM="macos"
+        VPNSUBTYPE="com.wireguard.macos"
+        ONDEMAND_BLOCK=$(cat <<EOD
+      <key>OnDemandEnabled</key>
+      <integer>1</integer>
+      <key>OnDemandRules</key>
+      <array>
+        <dict>
+          <key>Action</key>
+          <string>Disconnect</string>
+          <key>SSIDMatch</key>
+          <array>
+            <string>Slote-G</string>
+            <string>Slote-Guest</string>
+            <string>Slote-Service</string>
+          </array>
+        </dict>
+        <dict>
+          <key>Action</key>
+          <string>Connect</string>
+        </dict>
+      </array>
+EOD
+)
+    else
+        PLATFORM="macos"
+        VPNSUBTYPE="com.wireguard.macos"
+        ONDEMAND_BLOCK=""
+    fi
+    output_file="${output_dir}/${name}.mobileconfig"
+    uuid=$(uuidgen)
+    uuid_vpn=$(uuidgen)
+    wg_config=$(cat "$conf")
+    wg_config_escaped=$(echo "$wg_config" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+    RemoteAddress=$(awk -F '=' '/^Endpoint/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "$conf")
+    cat > "$output_file" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadDisplayName</key>
+      <string>VPN</string>
+      <key>PayloadType</key>
+      <string>com.apple.vpn.managed</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+      <key>PayloadIdentifier</key>
+      <string>com.sloto.wireguard.${name}</string>
+      <key>PayloadUUID</key>
+      <string>${uuid_vpn}</string>
+      <key>UserDefinedName</key>
+      <string>${name}</string>
+      <key>VPNType</key>
+      <string>VPN</string>
+      <key>VPNSubType</key>
+      <string>${VPNSUBTYPE}</string>
+${ONDEMAND_BLOCK}
+      <key>VendorConfig</key>
+      <dict>
+        <key>WgQuickConfig</key>
+        <string>${wg_config_escaped}</string>
+      </dict>
+      <key>VPN</key>
+      <dict>
+        <key>RemoteAddress</key>
+        <string>${RemoteAddress}</string>
+        <key>AuthenticationMethod</key>
+        <string>Password</string>
+      </dict>
+    </dict>
+  </array>
+  <key>PayloadType</key>
+  <string>Configuration</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+  <key>PayloadIdentifier</key>
+  <string>com.sloto.wireguard.profile.${name}</string>
+  <key>PayloadUUID</key>
+  <string>${uuid}</string>
+  <key>PayloadDisplayName</key>
+  <string>WireGuard VPN ${name}</string>
+</dict>
+</plist>
+EOF
+    echo "✔️ Generated: $output_file ($PLATFORM)"
+done
