@@ -761,6 +761,7 @@ def get_devices_full(manifest_filter=None, search_term=None):
             if cached:
                 os_ver = cached.get('os_version', '-')
                 model = cached.get('model', '-')
+                product_name = cached.get('product_name', '-')
                 is_supervised = cached.get('is_supervised', False)
                 is_encrypted = cached.get('is_encrypted', False)
                 is_dep = cached.get('is_dep', False)
@@ -790,6 +791,7 @@ def get_devices_full(manifest_filter=None, search_term=None):
 
                 os_ver = hw.get('os_version', hw.get('OSVersion', '')) if hw else ''
                 model = hw.get('model_name', hw.get('ModelName', '')) if hw else ''
+                product_name = hw.get('product_name', hw.get('ProductName', '')) if hw else ''
 
                 # Supervised
                 is_supervised = False
@@ -819,6 +821,7 @@ def get_devices_full(manifest_filter=None, search_term=None):
                 device_cache.set(device_uuid, {
                     'os_version': os_ver,
                     'model': model,
+                    'product_name': product_name,
                     'is_supervised': is_supervised,
                     'is_encrypted': is_encrypted,
                     'is_dep': is_dep,
@@ -845,6 +848,7 @@ def get_devices_full(manifest_filter=None, search_term=None):
                 'os': os_type,
                 'os_version': os_ver or '-',
                 'model': model or '-',
+                'product_name': product_name or '-',
                 'manifest': manifest or '-',
                 'account': row.get('account', '') or '-',
                 'dep': 'Yes' if is_dep else 'No',

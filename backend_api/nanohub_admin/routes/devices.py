@@ -156,6 +156,7 @@ ADMIN_DEVICES_TEMPLATE = '''
                             <th class="sortable" data-col="os" onclick="sortDevices('os')">OS <span class="sort-arrow"></span></th>
                             <th class="sortable" data-col="os_version" onclick="sortDevices('os_version')">Version <span class="sort-arrow"></span></th>
                             <th class="sortable" data-col="model" onclick="sortDevices('model')">Model <span class="sort-arrow"></span></th>
+                            <th class="sortable" data-col="product_name" onclick="sortDevices('product_name')">Product <span class="sort-arrow"></span></th>
                             <th class="sortable" data-col="manifest" onclick="sortDevices('manifest')">Manifest <span class="sort-arrow"></span></th>
                             <th class="sortable" data-col="dep" onclick="sortDevices('dep')">DEP <span class="sort-arrow"></span></th>
                             <th class="sortable" data-col="supervised" onclick="sortDevices('supervised')">Supervised <span class="sort-arrow"></span></th>
@@ -166,7 +167,7 @@ ADMIN_DEVICES_TEMPLATE = '''
                         </tr>
                     </thead>
                     <tbody id="device-tbody">
-                        <tr><td colspan="13" style="text-align:center;color:#B0B0B0;">Loading devices...</td></tr>
+                        <tr><td colspan="14" style="text-align:center;color:#B0B0B0;">Loading devices...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -193,7 +194,7 @@ ADMIN_DEVICES_TEMPLATE = '''
                 filterDevices();
             } catch (error) {
                 document.getElementById('device-tbody').innerHTML =
-                    '<tr><td colspan="13" style="text-align:center;color:#dc2626;">Error loading devices</td></tr>';
+                    '<tr><td colspan="14" style="text-align:center;color:#dc2626;">Error loading devices</td></tr>';
             }
         }
 
@@ -265,7 +266,7 @@ ADMIN_DEVICES_TEMPLATE = '''
         function renderDevices() {
             const tbody = document.getElementById('device-tbody');
             if (!filteredDevices.length) {
-                tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:#B0B0B0;">No devices found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;color:#B0B0B0;">No devices found</td></tr>';
                 updatePagination(0);
                 return;
             }
@@ -287,6 +288,7 @@ ADMIN_DEVICES_TEMPLATE = '''
                     <td><span class="os-badge ${osClass}">${dev.os || '-'}</span></td>
                     <td>${dev.os_version || '-'}</td>
                     <td>${dev.model || '-'}</td>
+                    <td>${dev.product_name || '-'}</td>
                     <td>${dev.manifest || '-'}</td>
                     <td><span class="${isYesValue(dev.dep) ? 'yes-badge' : 'no-badge'}">${toYesNo(dev.dep)}</span></td>
                     <td><span class="${dev.supervised === 'Yes' ? 'yes-badge' : 'no-badge'}">${dev.supervised || '-'}</span></td>
