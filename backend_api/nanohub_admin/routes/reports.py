@@ -8,9 +8,9 @@ compliance reports, and activity tracking.
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from flask import Blueprint, render_template_string, session, request, jsonify, Response
+from flask import Blueprint, render_template_string, session, request, jsonify
 
 from config import Config
 from nanohub_admin.utils import login_required_admin
@@ -193,6 +193,7 @@ def admin_reports():
                 # Use cached processed data
                 os_ver = cached.get('os_version', '-')
                 model = cached.get('model', '-')
+                product_name = cached.get('product_name', '-')
                 is_supervised = cached.get('is_supervised', False)
                 is_encrypted = cached.get('is_encrypted', False)
                 is_dep = cached.get('is_dep', False)
@@ -238,6 +239,7 @@ def admin_reports():
 
                 os_ver = hw.get('os_version', hw.get('OSVersion', '')) if hw else ''
                 model = hw.get('model_name', hw.get('ModelName', '')) if hw else ''
+                product_name = hw.get('product_name', hw.get('ProductName', '')) if hw else ''
 
                 # Supervised
                 is_supervised = False
@@ -271,6 +273,7 @@ def admin_reports():
                 device_cache.set(cache_key, {
                     'os_version': os_ver,
                     'model': model,
+                    'product_name': product_name,
                     'is_supervised': is_supervised,
                     'is_encrypted': is_encrypted,
                     'is_dep': is_dep,
@@ -317,6 +320,7 @@ def admin_reports():
                 'os': os_type,
                 'os_version': os_ver or '-',
                 'model': model or '-',
+                'product_name': product_name or '-',
                 'manifest': manifest or '-',
                 'account': row.get('account', '') or '-',
                 'dep': 'Yes' if is_dep else 'No',
@@ -471,6 +475,7 @@ def api_reports_data():
             if cached:
                 os_ver = cached.get('os_version', '-')
                 model = cached.get('model', '-')
+                product_name = cached.get('product_name', '-')
                 is_supervised = cached.get('is_supervised', False)
                 is_encrypted = cached.get('is_encrypted', False)
                 is_dep = cached.get('is_dep', False)
@@ -513,6 +518,7 @@ def api_reports_data():
 
                 os_ver = hw.get('os_version', hw.get('OSVersion', '')) if hw else ''
                 model = hw.get('model_name', hw.get('ModelName', '')) if hw else ''
+                product_name = hw.get('product_name', hw.get('ProductName', '')) if hw else ''
 
                 is_supervised = False
                 if hw:
@@ -529,7 +535,7 @@ def api_reports_data():
                 if dep_val in ('enabled', '1', 'yes', 'true'):
                     is_dep = True
                 elif sec:
-                    dep_sec = sec.get('enrolled_via_dep', sec.get('IsDeviceEnrollmentProgram', sec.get('DEPEnrolled')))
+                    dep_sec = sec.get('enrolled_via_dep', sec.get('IsDeviceEnrolledVia', sec.get('DEPEnrolled')))
                     is_dep = dep_sec is True or str(dep_sec).lower() in ('true', 'yes', '1')
 
                 profile_check = required_profiles.check_device_profiles(manifest, os_type, profiles)
@@ -539,6 +545,7 @@ def api_reports_data():
                 device_cache.set(cache_key, {
                     'os_version': os_ver,
                     'model': model,
+                    'product_name': product_name,
                     'is_supervised': is_supervised,
                     'is_encrypted': is_encrypted,
                     'is_dep': is_dep,
@@ -582,6 +589,7 @@ def api_reports_data():
                 'os': os_type,
                 'os_version': os_ver or '-',
                 'model': model or '-',
+                'product_name': product_name or '-',
                 'manifest': manifest or '-',
                 'account': row.get('account', '') or '-',
                 'dep': 'Yes' if is_dep else 'No',
@@ -803,6 +811,7 @@ ADMIN_REPORTS_TEMPLATE = '''
                             <th class="sortable" data-col="os" onclick="sortTable('os')">OS <span class="sort-arrow"></span></th>
                             <th class="sortable" data-col="os_version" onclick="sortTable('os_version')">Version <span class="sort-arrow"></span></th>
                             <th class="sortable" data-col="model" onclick="sortTable('model')">Model <span class="sort-arrow"></span></th>
+                            <th class="sortable" data-col="product_name" onclick="sortTable('product_name')">Product <span class="sort-arrow"></span></th>
                             <th class="sortable" data-col="manifest" onclick="sortTable('manifest')">Manifest <span class="sort-arrow"></span></th>
                             <th class="sortable" data-col="dep" onclick="sortTable('dep')">DEP <span class="sort-arrow"></span></th>
                             <th class="sortable" data-col="supervised" onclick="sortTable('supervised')">Supervised <span class="sort-arrow"></span></th>
@@ -1149,6 +1158,7 @@ ADMIN_REPORTS_TEMPLATE = '''
                 <td><span class="os-badge ${d.os.toLowerCase()}">${d.os}</span></td>
                 <td>${d.os_version}</td>
                 <td>${d.model}</td>
+                <td>${d.product_name}</td>
                 <td>${d.manifest}</td>
                 <td><span class="badge badge-${d.dep === 'Yes' ? 'yes' : 'no'}">${d.dep}</span></td>
                 <td><span class="badge badge-${d.supervised === 'Yes' ? 'yes' : 'no'}">${d.supervised}</span></td>
@@ -1424,13 +1434,14 @@ ADMIN_REPORTS_TEMPLATE = '''
     }
 
     function exportCSV() {
-        const headers = ['Hostname', 'Serial', 'OS', 'Version', 'Model', 'Manifest', 'Enrollment Type', 'Supervised', 'Encrypted', 'Outdated OS', 'Outdated Apps', 'Profiles Status', 'Missing Profiles', 'DDM Status', 'Missing DDM', 'Last Check-in', 'Status'];
+        const headers = ['Hostname', 'Serial', 'OS', 'Version', 'Model', 'Product Name', 'Manifest', 'Enrollment Type', 'Supervised', 'Encrypted', 'Outdated OS', 'Outdated Apps', 'Profiles Status', 'Missing Profiles', 'DDM Status', 'Missing DDM', 'Last Check-in', 'Status'];
         const rows = filteredDevices.map(d => [
             d.hostname,
             d.serial,
             d.os,
             d.os_version,
             d.model,
+            d.product_name,
             d.manifest,
             d.enrollment_type || d.dep,
             d.supervised,
@@ -1459,7 +1470,7 @@ ADMIN_REPORTS_TEMPLATE = '''
             return;
         }
 
-        const headers = ['Hostname', 'Serial', 'OS', 'Version', 'Model', 'Manifest', 'Enrollment Type', 'Supervised', 'Encrypted', 'Outdated OS', 'Outdated Apps', 'Profiles Status', 'Missing Profiles', 'DDM Status', 'Missing DDM', 'Last Check-in', 'Status'];
+        const headers = ['Hostname', 'Serial', 'OS', 'Version', 'Model', 'Product Name', 'Manifest', 'Enrollment Type', 'Supervised', 'Encrypted', 'Outdated OS', 'Outdated Apps', 'Profiles Status', 'Missing Profiles', 'DDM Status', 'Missing DDM', 'Last Check-in', 'Status'];
         const selected = allDevices.filter(d => selectedUuids.has(d.uuid));
         const rows = selected.map(d => [
             d.hostname,
@@ -1467,6 +1478,7 @@ ADMIN_REPORTS_TEMPLATE = '''
             d.os,
             d.os_version,
             d.model,
+            d.product_name,
             d.manifest,
             d.enrollment_type || d.dep,
             d.supervised,
