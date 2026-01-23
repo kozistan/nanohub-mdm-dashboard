@@ -1,0 +1,22 @@
+[Unit]
+Description=NanoHUB Webhook Service
+After=network.target
+
+[Service]
+Type=simple
+User=nanohub
+Group=nanohub
+WorkingDirectory=/opt/nanohub/webhook
+ExecStart=/opt/nanohub/venv/bin/python -u /opt/nanohub/webhook/webhook.py
+Environment="NANOHUB_DB_HOST=127.0.0.1"
+Environment="NANOHUB_DB_USER=nanohub"
+Environment="NANOHUB_DB_PASSWORD=CHANGE_ME_DB_PASSWORD"
+Environment="NANOHUB_DB_NAME=nanohub"
+Environment="WEBHOOK_SECRET=CHANGE_ME_WEBHOOK_SECRET"
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

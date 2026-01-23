@@ -1,0 +1,97 @@
+server {
+    listen 80;
+    server_name your-domain.com;
+    
+    root /var/www/mdm-web;
+    index index.html;
+    
+    # Security headers
+    add_header X-Frame-Options SAMEORIGIN;
+    add_header X-Content-Type-Options nosniff;
+    
+    # Static files
+    location /static/ {
+        alias /var/www/mdm-web/static/;
+        expires 1d;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # Direct file endpoints
+    location /api/devices.json {
+        alias /opt/nanohub/data/devices.json;
+        add_header Content-Type application/json;
+    }
+    
+    # Flask backend API endpoints (port 9006)
+    location /api/dep-account-detail {
+        proxy_pass http://127.0.0.1:9006/api/dep-account-detail;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    
+    location /api/cfg-get-cert {
+        proxy_pass http://127.0.0.1:9006/api/cfg-get-cert;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    
+    location /api/mdm-analyzer {
+        proxy_pass http://127.0.0.1:9006/api/mdm-analyzer;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    
+    location /api/device-info {
+        proxy_pass http://127.0.0.1:9006/api/device-info;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    
+    location /api/os-updates {
+        proxy_pass http://127.0.0.1:9006/api/os-updates;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    
+    location /api/device-search {
+        proxy_pass http://127.0.0.1:9006/api/device-search;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    
+    location /api/profile-list {
+        proxy_pass http://127.0.0.1:9006/api/profile-list;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    
+    location /api/installed-apps {
+        proxy_pass http://127.0.0.1:9006/api/installed-apps;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    
+    location /api/wake-device {
+        proxy_pass http://127.0.0.1:9006/api/wake-device;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Frontend routing
+    location / {
+        try_files $uri $uri/ /index.html =404;
+    }
+    
+    # Logging
+    access_log /var/log/nginx/nanohub.access.log;
+    error_log /var/log/nginx/nanohub.error.log;
+}

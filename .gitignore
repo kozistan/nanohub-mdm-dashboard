@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Flask
+instance/
+.webassets-cache
+
+# Environment files with secrets
+mdm_flask_api_environment
+*.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+*.backup
+*.plist
+
+# Credentials and keys
+*_credentials.json
+*_api_key.txt
+*.pem
+*.key
+*.crt
+nanohub_environment
+*.env
+
+# Device data
+devices.json
+webhook.log
+
+# Config files with sensitive data
+# Note: config.py is now sanitized (uses CHANGE_ME placeholders)
+# Note: settings.py in routes/ is part of the application
+/settings.py
+
+# Backup files
+backups/
+backup_theme_*/

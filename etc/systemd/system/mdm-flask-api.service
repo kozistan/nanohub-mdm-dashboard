@@ -1,0 +1,14 @@
+[Unit]
+Description=MDM Flask Backend API Service (universal for MDM, DEP, SCEP)
+After=network.target
+
+[Service]
+Type=simple
+User=nanohub
+WorkingDirectory=/path/to/WorkingDirectory
+EnvironmentFile=/path/to/mdm_flask_api_environment
+ExecStart=/path/to/venv/bin/python3 /path/to/mdm-flask-api_wrappper.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

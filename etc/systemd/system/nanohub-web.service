@@ -1,0 +1,18 @@
+[Unit]
+Description=NanoHUB Web Frontend with LDAP Authentication
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=microm
+Group=www-data
+WorkingDirectory=/opt/nanohub/backend_api
+Environment="PATH=/opt/nanohub/venv/bin"
+ExecStartPre=/bin/sleep 5
+ExecStart=/opt/nanohub/venv/bin/python /opt/nanohub/backend_api/nanohub_web.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
