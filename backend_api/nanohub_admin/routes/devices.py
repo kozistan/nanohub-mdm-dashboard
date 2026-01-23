@@ -4,10 +4,12 @@ NanoHUB Admin - Devices Routes
 Device inventory list and device detail pages.
 """
 
+import json
 import logging
 
 from flask import Blueprint, render_template_string, session, request, jsonify
 
+from db_utils import db
 from nanohub_admin.utils import login_required_admin
 from nanohub_admin.core import (
     get_manifests_list,
@@ -16,9 +18,7 @@ from nanohub_admin.core import (
     get_device_detail,
     get_device_command_history,
     execute_device_query,
-    get_required_profiles_map,
     get_device_details,
-    save_device_details,
 )
 
 logger = logging.getLogger('nanohub_admin')

@@ -19,16 +19,17 @@ import json
 import base64
 import logging
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-from flask import session
+from datetime import datetime, timedelta
 
 from config import Config
-from db_utils import db, devices, command_history, required_profiles
-from command_registry import (
-    COMMANDS, CATEGORIES, COMMANDS_DIR, PROFILE_DIRS,
-    get_commands_by_category, get_command, get_available_profiles, check_role_permission
-)
+from db_utils import db, devices, required_profiles
+
+# Database config for shell commands (mysql CLI)
+DB_CONFIG = Config.DB
+
+from command_registry import COMMANDS_DIR, PROFILE_DIRS, get_command, check_role_permission
 from webhook_poller import poll_webhook_for_command
 
 from .core import (
@@ -36,7 +37,6 @@ from .core import (
     validate_device_access,
     sanitize_param,
     normalize_devices_param,
-    get_manifests_list,
     extract_command_uuid_from_output,
 )
 from .profiles import execute_manage_profiles
