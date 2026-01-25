@@ -113,8 +113,8 @@ reports_bp = Blueprint('admin_reports', __name__)
 # Import shared functions from core module (they stay in core to avoid circular imports)
 def _get_shared_functions():
     """Lazy import to avoid circular imports"""
-    from nanohub_admin.core import fetch_apple_latest_os, get_manifests_list
-    return fetch_apple_latest_os, get_manifests_list
+    from nanohub_admin.core import fetch_apple_latest_os, get_manifests_list, is_device_outdated
+    return fetch_apple_latest_os, get_manifests_list, is_device_outdated
 
 
 # =============================================================================
@@ -128,12 +128,9 @@ def admin_reports():
     user = session.get('user', {})
     manifest_filter = user.get('manifest_filter')  # e.g. 'site-%' for site-admin
 
-    # Get Apple latest versions for outdated detection
-    fetch_apple_latest_os, get_manifests_list = _get_shared_functions()
-    apple_latest = fetch_apple_latest_os()
-    latest_versions = {}
-    for os_type, info in apple_latest.items():
-        latest_versions[os_type] = info.get('ver_tuple', (0,))
+    # Get shared functions
+    fetch_apple_latest_os, get_manifests_list, is_device_outdated = _get_shared_functions()
+    apple_latest = fetch_apple_latest_os()  # Still needed for latest_versions display
 
     # Get all devices with details
     devices = []
@@ -281,14 +278,8 @@ def admin_reports():
                     'ddm_check': ddm_check
                 })
 
-            # Outdated OS check (uses latest_versions which may change, so compute each time)
-            is_outdated = False
-            if os_ver and os_type in latest_versions:
-                try:
-                    ver_tuple = tuple(int(x) for x in str(os_ver).split('.')[:3])
-                    is_outdated = ver_tuple < latest_versions[os_type]
-                except:
-                    pass
+            # Outdated OS check - compare against max supported version for this specific model
+            is_outdated = is_device_outdated(os_ver, product_name)
 
             # Outdated apps check
             outdated_apps = get_outdated_apps(row.get('apps_data'), os_type, expected_app_versions)
@@ -411,12 +402,9 @@ def api_reports_data():
     user = session.get('user', {})
     manifest_filter = user.get('manifest_filter')
 
-    # Get Apple latest versions for outdated detection
-    fetch_apple_latest_os, get_manifests_list = _get_shared_functions()
-    apple_latest = fetch_apple_latest_os()
-    latest_versions = {}
-    for os_type, info in apple_latest.items():
-        latest_versions[os_type] = info.get('ver_tuple', (0,))
+    # Get shared functions
+    fetch_apple_latest_os, get_manifests_list, is_device_outdated = _get_shared_functions()
+    apple_latest = fetch_apple_latest_os()  # Still needed for latest_versions display
 
     # Get all devices with details
     devices_list = []
@@ -553,14 +541,8 @@ def api_reports_data():
                     'ddm_check': ddm_check
                 })
 
-            # Outdated check
-            is_outdated = False
-            if os_ver and os_type in latest_versions:
-                try:
-                    ver_tuple = tuple(int(x) for x in str(os_ver).split('.')[:3])
-                    is_outdated = ver_tuple < latest_versions[os_type]
-                except:
-                    pass
+            # Outdated check - compare against max supported version for this specific model
+            is_outdated = is_device_outdated(os_ver, product_name)
 
             # Outdated apps check
             outdated_apps = get_outdated_apps(row.get('apps_data'), os_type, expected_app_versions)

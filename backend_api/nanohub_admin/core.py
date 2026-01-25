@@ -166,6 +166,93 @@ def validate_device_access(uuid_val, user_info):
 _apple_os_cache = {'data': None, 'timestamp': 0}
 _APPLE_OS_CACHE_TTL = 6 * 60 * 60  # 6 hours in seconds
 
+# Per-model cache for outdated detection
+_model_version_cache = {}  # {model_id: {'version': '18.2', 'ver_tuple': (18, 2), 'timestamp': ...}}
+_MODEL_CACHE_TTL = 24 * 60 * 60  # 24 hours - models don't change often
+
+
+def fetch_max_os_for_model(model_id: str) -> dict:
+    """Fetch maximum supported OS version for a specific device model from IPSW.me API.
+
+    Args:
+        model_id: Device identifier like 'iPhone14,5', 'MacBookAir10,1'
+
+    Returns:
+        Dict with 'version' and 'ver_tuple', or empty dict if failed
+    """
+    global _model_version_cache
+
+    if not model_id:
+        return {}
+
+    now = time.time()
+
+    # Check cache
+    if model_id in _model_version_cache:
+        cached = _model_version_cache[model_id]
+        if (now - cached.get('timestamp', 0)) < _MODEL_CACHE_TTL:
+            return cached
+
+    try:
+        url = f"https://api.ipsw.me/v4/device/{model_id}?type=ipsw"
+        req = urllib.request.Request(url, headers={'User-Agent': 'NanoHUB/1.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode('utf-8'))
+
+        # Find latest signed firmware for this model
+        firmwares = data.get('firmwares', [])
+        signed = [f for f in firmwares if f.get('signed')]
+
+        if signed:
+            latest = signed[0]
+            version = latest.get('version', '')
+
+            # Parse version tuple
+            try:
+                ver_tuple = tuple(int(x) for x in str(version).split('.')[:3])
+            except Exception:
+                ver_tuple = (0,)
+
+            result = {
+                'version': version,
+                'ver_tuple': ver_tuple,
+                'timestamp': now
+            }
+            _model_version_cache[model_id] = result
+            return result
+
+    except Exception as e:
+        logger.debug(f"Failed to fetch version for model {model_id}: {e}")
+
+    return {}
+
+
+def is_device_outdated(device_version: str, model_id: str) -> bool:
+    """Check if device OS version is outdated compared to max supported for its model.
+
+    Args:
+        device_version: Current OS version on device (e.g., '15.8', '18.2')
+        model_id: Device identifier (e.g., 'iPhone9,1', 'MacBookAir10,1')
+
+    Returns:
+        True if device can be updated to a newer OS, False otherwise
+    """
+    if not device_version or not model_id:
+        return False
+
+    # Parse device version
+    try:
+        device_tuple = tuple(int(x) for x in str(device_version).split('.')[:3])
+    except Exception:
+        return False
+
+    # Get max supported version for this model
+    max_info = fetch_max_os_for_model(model_id)
+    if not max_info or 'ver_tuple' not in max_info:
+        return False
+
+    return device_tuple < max_info['ver_tuple']
+
 
 def fetch_apple_latest_os():
     """Fetch latest OS versions from IPSW.me API with caching"""
@@ -706,12 +793,6 @@ def get_devices_list(manifest_filter=None):
 
 def get_devices_full(manifest_filter=None, search_term=None):
     """Get full device list with all fields for standard device table format."""
-    # Get Apple latest versions for outdated detection
-    apple_latest = fetch_apple_latest_os()
-    latest_versions = {}
-    for os_type, info in apple_latest.items():
-        latest_versions[os_type] = info.get('ver_tuple', (0,))
-
     # Build WHERE clause
     where_parts = []
     if manifest_filter:
@@ -828,14 +909,8 @@ def get_devices_full(manifest_filter=None, search_term=None):
                     'profile_check': profile_check
                 })
 
-            # Outdated check
-            is_outdated = False
-            if os_ver and os_type in latest_versions:
-                try:
-                    ver_tuple = tuple(int(x) for x in str(os_ver).split('.')[:3])
-                    is_outdated = ver_tuple < latest_versions[os_type]
-                except Exception:
-                    pass
+            # Outdated check - compare against max supported version for this specific model
+            is_outdated = is_device_outdated(os_ver, product_name)
 
             # Last check-in
             last_seen = row.get('max_last_seen')
