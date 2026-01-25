@@ -117,20 +117,32 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 
 ## Screenshots
 
-### Main Dashboard
-![Main Dashboard](screenshots/01_main_dashboard.png)
+### Execution History
+![Execution History](screenshots/01-execution-history.png)
 
-### Admin Panel
-![Admin Panel](screenshots/02_admin_panel.png)
+### Device Reports
+![Device Reports](screenshots/02-device-reports.png)
 
-### Profile_list command on Admin Panel
-![command](screenshots/03_profile_list_command.png)
+### VPP Licenses
+![VPP Licenses](screenshots/03-vpp-licenses.png)
 
-### VPP Panel
-![VPP Panel](screenshots/04_vpp_panel.png)
+### DDM (Declarative Device Management)
+![DDM](screenshots/04-ddm.png)
 
-### Device Detail Panel
-![Device Panel](screenshots/05_device_panel.png)
+### Required Profiles
+![Required Profiles](screenshots/05-required-profiles.png)
+
+### Device Inventory
+![Device Inventory](screenshots/06-device-inventory.png)
+
+### Manage Profiles
+![Manage Profiles](screenshots/07-manage-profiles.png)
+
+### Commands
+![Commands](screenshots/08-commands.png)
+
+### Settings
+![Settings](screenshots/09-settings.png)
 
 ## Architecture
 
