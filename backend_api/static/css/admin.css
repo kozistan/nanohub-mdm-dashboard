@@ -67,11 +67,10 @@ img, video, iframe, embed, object {
    ============================================================================= */
 
 .admin-header {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
     margin-bottom: 15px;
-    flex-wrap: wrap;
     gap: 10px;
 }
 
@@ -80,11 +79,16 @@ img, video, iframe, embed, object {
     text-align: left;
     color: #FFFFFF;
     font-family: var(--font-heading);
+    justify-self: start;
 }
 
 .admin-header .nav-tabs {
-    position: static;
+    justify-self: center;
     margin: 0;
+}
+
+.admin-header > div:last-child {
+    justify-self: end;
 }
 
 .nav-tabs {
@@ -290,89 +294,6 @@ html body.page-with-table #tab-content-ddm #ddm-content > .table-wrapper {
     display: block !important;
 }
 
-/* Panel containing command form should grow to fill space - only when table has data */
-html body.page-with-table .panel:has(form#commandForm):has(#device-tbody tr:nth-child(2)) {
-    flex: 1 1 auto !important;
-}
-
-/* Form inside panel (for Commands page) - flex layout with scrollable table only */
-html body.page-with-table .panel > form#commandForm {
-    flex: 1 !important;
-    display: flex !important;
-    flex-direction: column !important;
-    overflow: hidden !important;
-    min-height: 0 !important;
-}
-
-
-/* Form group containing device table - flex container that grows */
-html body.page-with-table .panel > form#commandForm > .form-group:has(.device-table-container) {
-    flex: 1 1 auto !important;
-    display: flex !important;
-    flex-direction: column !important;
-    min-height: 0 !important;
-    overflow: hidden !important;
-}
-
-/* Inside device form-group: label and filters stay fixed */
-html body.page-with-table .panel > form#commandForm > .form-group:has(.device-table-container) > label,
-html body.page-with-table .panel > form#commandForm > .form-group:has(.device-table-container) > .filter-form,
-html body.page-with-table .panel > form#commandForm > .form-group:has(.device-table-container) > .panel-actions {
-    flex-shrink: 0 !important;
-}
-
-/* Device table scrolls and fills available space */
-html body.page-with-table .panel > form#commandForm > .form-group:has(.device-table-container) > .device-table-container {
-    flex: 1 1 auto !important;
-    min-height: 100px !important;
-    max-height: none !important;
-    overflow: auto !important;
-}
-
-/* Other form groups (profile select, inputs, etc.) stay fixed */
-html body.page-with-table .panel > form#commandForm > .form-group:not(:has(.device-table-container)) {
-    flex-shrink: 0 !important;
-}
-
-/* Submit button container stays fixed */
-html body.page-with-table .panel > form#commandForm > div:last-of-type {
-    flex-shrink: 0 !important;
-}
-
-/* =============================================================================
-   TWO-COLUMN LAYOUT FOR FORMS WITH MANY PARAMETERS (4+ form-groups)
-   ============================================================================= */
-
-html body.page-with-table .panel > form#commandForm:has(.form-group:nth-of-type(4)) {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr !important;
-    gap: 8px 15px !important;
-    align-content: start !important;
-    overflow: hidden !important;
-}
-
-/* Device table form-group spans full width */
-html body.page-with-table .panel > form#commandForm:has(.form-group:nth-of-type(4)) > .form-group:has(.device-table-container) {
-    grid-column: 1 / -1 !important;
-    display: flex !important;
-    flex-direction: column !important;
-    min-height: 120px !important;
-    flex: 1 !important;
-    overflow: hidden !important;
-}
-
-/* Device table scrolls within its container */
-html body.page-with-table .panel > form#commandForm:has(.form-group:nth-of-type(4)) > .form-group:has(.device-table-container) > .device-table-container {
-    flex: 1 !important;
-    min-height: 0 !important;
-    overflow: auto !important;
-}
-
-/* Submit button spans full width */
-html body.page-with-table .panel > form#commandForm:has(.form-group:nth-of-type(4)) > div:last-of-type {
-    grid-column: 1 / -1 !important;
-}
-
 .table-wrapper thead th,
 .table-wrapper .device-table thead th,
 .table-wrapper .report-table thead th {
@@ -382,6 +303,7 @@ html body.page-with-table .panel > form#commandForm:has(.form-group:nth-of-type(
     z-index: 10;
 }
 
+/* Device table container - compact by default, controlled by inline style in template */
 .device-table-container {
     max-height: 400px;
     overflow-y: auto;

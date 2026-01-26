@@ -186,7 +186,7 @@ ADMIN_COMMAND_TEMPLATE = '''
                             <button type="button" onclick="showAllDevices()" class="filter-btn">Show All</button>
                         </div>
                     </div>
-                    <div class="device-table-container">
+                    <div class="device-table-container" id="device-table-container" style="max-height: 400px !important; flex: none !important;">
                         <table class="device-table" id="device-table">
                             <thead>
                                 <tr><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>DEP</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
@@ -226,7 +226,7 @@ ADMIN_COMMAND_TEMPLATE = '''
                             <button type="button" onclick="showAllDevices()" class="filter-btn">Show All</button>
                         </div>
                     </div>
-                    <div class="device-table-container">
+                    <div class="device-table-container" id="device-table-container" style="max-height: 400px !important; flex: none !important;">
                         <table class="device-table" id="device-table">
                             <thead>
                                 <tr><th><input type="checkbox" id="select-all" onchange="toggleSelectAll()"></th><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>DEP</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
@@ -346,6 +346,12 @@ ADMIN_COMMAND_TEMPLATE = '''
     }
 
     function showAllDevices() {
+        // Remove inline style limit for full-height display
+        const container = document.getElementById('device-table-container');
+        if (container) {
+            container.style.maxHeight = 'calc(100vh - 400px)';
+        }
+
         fetch('/admin/api/devices')
             .then(r => r.json())
             .then(devices => {
@@ -365,6 +371,12 @@ ADMIN_COMMAND_TEMPLATE = '''
             showAllDevices();
             return;
         }
+        // Reset to compact display for search results
+        const container = document.getElementById('device-table-container');
+        if (container) {
+            container.style.maxHeight = '400px';
+        }
+
         const field = detectFieldType(input);
         fetch('/admin/api/device-search', {
             method: 'POST',
@@ -492,6 +504,12 @@ ADMIN_COMMAND_TEMPLATE = '''
     let allAutofillDevices = [];
 
     function showAllAutofillDevices() {
+        // Remove inline style limit for full-height display
+        const container = document.getElementById('device-table-container');
+        if (container) {
+            container.style.maxHeight = 'calc(100vh - 400px)';
+        }
+
         fetch('/admin/api/devices')
             .then(r => r.json())
             .then(devices => {
@@ -511,6 +529,12 @@ ADMIN_COMMAND_TEMPLATE = '''
             showAllAutofillDevices();
             return;
         }
+        // Reset to compact display for search results
+        const container = document.getElementById('device-table-container');
+        if (container) {
+            container.style.maxHeight = '400px';
+        }
+
         const field = detectFieldType(input);
         fetch('/admin/api/device-search', {
             method: 'POST',
