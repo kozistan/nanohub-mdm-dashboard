@@ -58,6 +58,7 @@ Thumbs.db
 *.key
 *.crt
 nanohub_environment
+environment.sh
 *.env
 
 # Device data
@@ -72,3 +73,8 @@ webhook.log
 # Backup files
 backups/
 backup_theme_*/
+
+# Claude Code project file (local only)
+CLAUDE.md
+CLAUDE.local.md
+.claude/

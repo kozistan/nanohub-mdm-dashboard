@@ -1,0 +1,343 @@
+#!/bin/bash
+# NanoHUB Update VPP From List - podle MicroMDM scriptu
+# Auto-installs/updates VPP apps based on JSON lists
+
+set -uo pipefail
+
+# Paths - UPDATED for NanoHUB
+IOS_APPS="/home/microm/nanohub/data/apps_ios_with_versions.json"
+MACOS_APPS="/home/microm/nanohub/data/apps_macos_with_versions.json"
+INSTALL_SCRIPT="/home/microm/nanohub/tools/api/commands/install_vpp_app"
+CMD_LIST_SCRIPT="/home/microm/nanohub/tools/api/commands/installed_application_list"
+NANOHUB_ENV="/home/microm/nanohub/environment.sh"
+LOGFILE="/var/log/nanohub/update_vpp.log"
+
+# Source environment (includes DB credentials, Telegram config)
+if [ -f "$NANOHUB_ENV" ]; then
+    source "$NANOHUB_ENV"
+else
+    echo "[ERROR] Environment file not found: $NANOHUB_ENV"
+    exit 1
+fi
+
+# Create log directory if not exists
+mkdir -p "$(dirname "$LOGFILE")"
+
+# Logging function
+log() {
+    local message="$1"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "$timestamp $message" | tee -a "$LOGFILE"
+}
+
+# Telegram send function
+send_telegram_message() {
+    local message="$1"
+    local hostname
+    hostname=$(hostname)
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+
+    # Format message with newlines
+    local formatted_message="DATE: ${timestamp}
+<b>HOST:</b> ${hostname}
+<b>DESCRIPTION:</b>
+${message}"
+
+    # Send via curl - using -d instead of --data-urlencode for better compatibility
+    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -d chat_id="${TELEGRAM_CHAT_ID}" \
+        -d parse_mode="HTML" \
+        -d text="${formatted_message}" > /dev/null 2>&1
+}
+
+# MySQL query function
+mysql_query() {
+    mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -e "$1" 2>/dev/null
+}
+
+# Function to check if InstalledApplicationList is pending for device
+check_pending_command() {
+    local device_uuid="$1"
+    local pending_count
+    
+    pending_count=$(mysql_query "
+        SELECT COUNT(*) as pending_count
+        FROM commands c
+        JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+        LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid
+        WHERE eq.id = '$device_uuid'
+        AND c.request_type = 'InstalledApplicationList'
+        AND cr.command_uuid IS NULL;" | tail -n +2)
+    
+    [[ "$pending_count" -gt 0 ]]
+}
+
+# Version comparison function
+version_gt() {
+    [ "$1" = "$2" ] && return 1
+    [ "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1" ]
+}
+
+# Validate required files
+for file in "$IOS_APPS" "$MACOS_APPS" "$INSTALL_SCRIPT" "$CMD_LIST_SCRIPT"; do
+    if [ ! -f "$file" ]; then
+        log "[ERROR] Required file not found: $file"
+        exit 1
+    fi
+done
+
+log "=================================================="
+log "STARTING VPP UPDATE PROCESS"
+log "=================================================="
+log "Devices source: SQL database (device_inventory)"
+log "iOS apps: $IOS_APPS"
+log "macOS apps: $MACOS_APPS"
+log "Log file: $LOGFILE"
+log ""
+
+# Read devices from SQL database
+DEVICE_ROWS_SQL=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -sN -e "SELECT uuid, serial, os, hostname FROM device_inventory ORDER BY hostname" 2>/dev/null)
+
+if [ -z "$DEVICE_ROWS_SQL" ]; then
+    log "[ERROR] No devices found in database"
+    exit 1
+fi
+
+# Convert SQL output to array
+mapfile -t DEVICE_ROWS_ARRAY <<< "$DEVICE_ROWS_SQL"
+
+device_count=${#DEVICE_ROWS_ARRAY[@]}
+log "[INFO] Found $device_count devices to process"
+log ""
+
+processed_devices=0
+skipped_devices=0
+total_apps_processed=0
+total_apps_installed=0
+total_apps_updated=0
+total_apps_current=0
+
+# Arrays for detailed report tracking
+declare -a DEVICE_DETAILS=()      # Stores per-device summaries
+declare -a OFFLINE_DEVICES=()     # Stores offline/failed devices
+
+for row in "${DEVICE_ROWS_ARRAY[@]}"; do
+    # Parse SQL output (tab-separated: uuid, serial, os, hostname)
+    UDID=$(echo "$row" | awk '{print $1}')
+    SERIAL=$(echo "$row" | awk '{print $2}')
+    OS=$(echo "$row" | awk '{print $3}')
+    HOSTNAME=$(echo "$row" | awk '{print $4}')
+
+    # Skip if essential data missing
+    if [[ -z "$UDID" || -z "$SERIAL" || -z "$OS" ]]; then
+        log "[WARNING] Skipping device with missing data: $row"
+        continue
+    fi
+
+    processed_devices=$((processed_devices + 1))
+
+    log "=================================================="
+    log "[$processed_devices/$device_count] Processing device: $HOSTNAME ($OS)"
+    log "UDID: $UDID"
+    log "Serial: $SERIAL"
+    log "=================================================="
+
+    # Check if InstalledApplicationList command is already pending
+    if check_pending_command "$UDID"; then
+        log "[SKIP] $HOSTNAME - InstalledApplicationList already pending in queue"
+        log "[SKIP] Moving to next device to prevent duplicate commands"
+        skipped_devices=$((skipped_devices + 1))
+        OFFLINE_DEVICES+=("$HOSTNAME (pending command)")
+        continue
+    fi
+
+    # Determine which apps file to use
+    APPS_FILE="$IOS_APPS"
+    [[ "$OS" == "macos" ]] && APPS_FILE="$MACOS_APPS"
+
+    log "[INFO] Using apps file: $APPS_FILE"
+
+    # Trigger InstalledApplicationList command
+    log "[INFO] Triggering InstalledApplicationList for $HOSTNAME"
+    if ! "$CMD_LIST_SCRIPT" "$UDID" > /dev/null 2>&1; then
+        log "[WARNING] Command execution failed on $HOSTNAME"
+        OFFLINE_DEVICES+=("$HOSTNAME (command failed)")
+        continue
+    fi
+
+    # Wait for webhook response and extract installed apps
+    log "[INFO] Waiting for InstalledApplicationList response..."
+    LOG_LINE=""
+    for i in {1..12}; do
+        # Look for recent InstalledApplicationList response for this device
+        if LOG_LINE=$(grep -A1000 "InstalledApplicationList" /var/log/nanohub/webhook.log 2>/dev/null | grep -A500 "$UDID" | tail -n 1000 2>/dev/null); then
+            if [[ -n "$LOG_LINE" ]] && echo "$LOG_LINE" | grep -q "v[0-9]"; then
+                log "[INFO] Found InstalledApplicationList response (attempt $i)"
+                break
+            fi
+        fi
+        log "[DEBUG] Waiting for response... (attempt $i/12)"
+        sleep 5
+    done
+
+    if [[ -z "$LOG_LINE" ]]; then
+        log "[ERROR] No InstalledApplicationList response found for $HOSTNAME"
+        log "[ERROR] Check webhook.log and device connectivity"
+        OFFLINE_DEVICES+=("$HOSTNAME (no response)")
+        continue
+    fi
+
+    # Process each app from the apps file
+    if ! mapfile -t APPS < <(jq -c '.apps[]' "$APPS_FILE" 2>/dev/null); then
+        log "[ERROR] Failed to parse apps file: $APPS_FILE"
+        continue
+    fi
+
+    apps_count=${#APPS[@]}
+    log "[INFO] Checking $apps_count apps for $HOSTNAME"
+    log ""
+
+    device_installed=0
+    device_updated=0
+    device_current=0
+
+    # Array to track installed/updated apps for this device
+    declare -a device_installed_apps=()
+    declare -a device_updated_apps=()
+
+    for app in "${APPS[@]}"; do
+        ADAMID=$(jq -r '.adamId' <<< "$app")
+        BUNDLE=$(jq -r '.bundleId' <<< "$app")
+        EXPECTED_VERSION=$(jq -r '.version' <<< "$app")
+        APP_NAME=$(jq -r '.name // .bundleId' <<< "$app")
+
+        total_apps_processed=$((total_apps_processed + 1))
+
+        # Extract installed version from webhook log - FIXED for NanoHUB format
+        # Webhook format: [INFO]   [320] Xcode (com.apple.dt.Xcode) v16.4
+        INSTALLED_VERSION=$(echo "$LOG_LINE" | grep -E "\($BUNDLE\)" | grep -o "v[0-9][0-9.a-zA-Z]*" | tr -d 'v' | head -n1 || true)
+
+        if [[ -z "$INSTALLED_VERSION" ]]; then
+            log "[INSTALL] $HOSTNAME - $APP_NAME ($BUNDLE) not installed - installing v$EXPECTED_VERSION"
+
+            if "$INSTALL_SCRIPT" "$UDID" "$ADAMID" "$SERIAL" "$BUNDLE" >> "$LOGFILE" 2>&1; then
+                log "[SUCCESS] $HOSTNAME - installed $APP_NAME version $EXPECTED_VERSION"
+                device_installed=$((device_installed + 1))
+                total_apps_installed=$((total_apps_installed + 1))
+                device_installed_apps+=("$APP_NAME v$EXPECTED_VERSION")
+            else
+                log "[ERROR] $HOSTNAME - installation failed for $APP_NAME"
+            fi
+
+        elif version_gt "$EXPECTED_VERSION" "$INSTALLED_VERSION"; then
+            log "[UPDATE] $HOSTNAME - updating $APP_NAME from v$INSTALLED_VERSION to v$EXPECTED_VERSION"
+
+            if "$INSTALL_SCRIPT" "$UDID" "$ADAMID" "$SERIAL" "$BUNDLE" >> "$LOGFILE" 2>&1; then
+                log "[SUCCESS] $HOSTNAME - updated $APP_NAME to version $EXPECTED_VERSION"
+                device_updated=$((device_updated + 1))
+                total_apps_updated=$((total_apps_updated + 1))
+                device_updated_apps+=("$APP_NAME v$INSTALLED_VERSION → v$EXPECTED_VERSION")
+            else
+                log "[ERROR] $HOSTNAME - update failed for $APP_NAME"
+            fi
+
+        else
+            log "[CURRENT] $HOSTNAME - $APP_NAME is up-to-date (v$INSTALLED_VERSION)"
+            device_current=$((device_current + 1))
+            total_apps_current=$((total_apps_current + 1))
+        fi
+
+        # ADDED: Longer delay between apps to prevent timeouts and database issues
+        sleep 10
+    done
+
+    log ""
+    log "[DEVICE SUMMARY] $HOSTNAME:"
+    log "  Installed: $device_installed apps"
+    log "  Updated: $device_updated apps"
+    log "  Current: $device_current apps"
+    log ""
+
+    # Build detailed summary for this device
+    local device_summary="<b>$HOSTNAME</b>:"
+
+    if [[ $device_installed -gt 0 ]]; then
+        device_summary+="\n  <b>Installed ($device_installed):</b>"
+        for app in "${device_installed_apps[@]}"; do
+            device_summary+="\n    • $app"
+        done
+    fi
+
+    if [[ $device_updated -gt 0 ]]; then
+        device_summary+="\n  <b>Updated ($device_updated):</b>"
+        for app in "${device_updated_apps[@]}"; do
+            device_summary+="\n    • $app"
+        done
+    fi
+
+    if [[ $device_current -gt 0 ]]; then
+        device_summary+="\n  <b>Current:</b> $device_current apps up-to-date"
+    fi
+
+    # Only add device to report if there were installations or updates
+    if [[ $device_installed -gt 0 || $device_updated -gt 0 ]]; then
+        DEVICE_DETAILS+=("$device_summary")
+    fi
+done
+
+log "=================================================="
+log "VPP UPDATE PROCESS COMPLETED"
+log "=================================================="
+log "Devices processed: $processed_devices"
+log "Devices skipped (pending commands): $skipped_devices"
+log "Total apps processed: $total_apps_processed"
+log "Apps installed: $total_apps_installed"
+log "Apps updated: $total_apps_updated"
+log "Apps current: $total_apps_current"
+log ""
+log "Log file: $LOGFILE"
+log "=================================================="
+
+# ================================================
+# TELEGRAM REPORT GENERATION
+# ================================================
+
+log "[INFO] Generating Telegram report..."
+
+# Part 1: Summary message
+SUMMARY_MESSAGE="<b>📱 VPP UPDATE REPORT</b>
+<b>═══════════════════════════</b>
+
+<b>📊 SUMMARY:</b>
+• Devices processed: $processed_devices
+• Devices skipped: $skipped_devices
+• Apps installed: $total_apps_installed
+• Apps updated: $total_apps_updated
+• Apps current: $total_apps_current"
+
+send_telegram_message "$SUMMARY_MESSAGE"
+log "[INFO] Summary sent to Telegram"
+sleep 1
+
+# Part 2: Offline/Failed devices (only if there are any)
+if [[ ${#OFFLINE_DEVICES[@]} -gt 0 ]]; then
+    OFFLINE_MESSAGE="<b>⚠️ OFFLINE/FAILED DEVICES:</b>
+<b>═══════════════════════════</b>
+"
+    for offline_device in "${OFFLINE_DEVICES[@]}"; do
+        OFFLINE_MESSAGE+="
+• ${offline_device}"
+    done
+
+    OFFLINE_MESSAGE+="
+
+<b>═══════════════════════════</b>
+<i>Log file: $LOGFILE</i>"
+
+    send_telegram_message "$OFFLINE_MESSAGE"
+    log "[INFO] Offline devices sent to Telegram"
+fi
+
+log "[SUCCESS] Telegram report complete"
