@@ -1,0 +1,35 @@
+[Unit]
+Description=NanoDEP Server
+Requires=docker.service
+After=docker.service
+Wants=network-online.target
+After=network-online.target
+After=mysql.service
+
+[Service]
+Type=simple
+User=microm
+Group=docker
+WorkingDirectory=/home/microm/nanohub/dep
+Environment=HOME=/home/microm
+ExecStartPre=/bin/sleep 3
+ExecStartPre=-/bin/bash -c '/usr/bin/docker stop nanodep 2>/dev/null || true'
+ExecStartPre=/bin/sleep 3
+ExecStartPre=-/bin/bash -c '/usr/bin/docker rm nanodep 2>/dev/null || true'
+ExecStart=/usr/bin/docker run --rm --name nanodep \
+  --network host \
+  --env-file /opt/nanohub/secrets/nanodep.env \
+  -v /etc/localtime:/etc/localtime:ro \
+  -v /etc/timezone:/etc/timezone:ro \
+  -v /home/microm/nanohub/dep:/data \
+  ghcr.io/micromdm/nanodep:latest \
+  -storage mysql \
+  -debug \
+  -listen :9001
+StandardOutput=append:/var/log/nanohub/nanodep.log
+StandardError=append:/var/log/nanohub/nanodep.log
+ExecStop=/usr/bin/docker stop nanodep
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

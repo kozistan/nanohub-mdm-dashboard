@@ -279,9 +279,85 @@ Set `WEBHOOK_SECRET` environment variable to match.
 ### File Permissions
 
 ```bash
-# Environment file (contains secrets)
-chmod 600 /opt/nanohub/backend_api/nanohub_environment
+# Secrets directory
+chmod 700 /opt/nanohub/secrets
+chmod 600 /opt/nanohub/secrets/*.env
+
+# Environment file
+chmod 600 /opt/nanohub/environment.sh
 
 # Backend files
 chmod 755 /opt/nanohub/backend_api/*.py
 ```
+
+## Secrets Management
+
+**DŮLEŽITÉ:** Žádné heslo ani token nesmí být hardcoded v konfiguračních souborech nebo systemd službách.
+
+### Struktura
+
+```
+/opt/nanohub/
+├── environment.sh          # Hlavní zdroj credentials (source pro skripty)
+└── secrets/                # Docker env soubory (chmod 700)
+    ├── mysql.env           # MYSQL_ROOT_PASSWORD, MYSQL_USER, etc.
+    ├── nanohub.env         # NANOHUB_STORAGE_DSN, NANOHUB_API_KEY
+    └── nanodep.env         # NANODEP_STORAGE_DSN, NANODEP_API
+```
+
+### Pravidla
+
+| Co | Kam | Jak |
+|----|-----|-----|
+| DB hesla | `environment.sh`, `secrets/*.env` | Nikdy do service souborů |
+| API keys | `environment.sh`, `secrets/*.env` | Nikdy do git |
+| Tokeny (VPP, Telegram) | `environment.sh` | Pouze env variables |
+
+### Systemd služby
+
+Služby používají `--env-file` místo hardcoded hodnot:
+
+```ini
+# Správně
+ExecStart=/usr/bin/docker run --env-file /opt/nanohub/secrets/nanohub.env ...
+
+# Špatně (heslo viditelné v ps aux)
+ExecStart=/usr/bin/docker run ... -storage-dsn "user:password@tcp(...)"
+```
+
+### Skripty
+
+Bash skripty čtou z `environment.sh`:
+
+```bash
+#!/bin/bash
+source /opt/nanohub/environment.sh
+mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -e "..."
+```
+
+### Po změně hesla
+
+1. Aktualizovat `/opt/nanohub/environment.sh`
+2. Regenerovat secrets soubory:
+   ```bash
+   source /opt/nanohub/environment.sh
+   cat > /opt/nanohub/secrets/nanohub.env << EOF
+   NANOHUB_STORAGE_DSN=${DB_USER}:${DB_PASSWORD}@tcp(127.0.0.1:3306)/${DB_NAME}?parseTime=true
+   NANOHUB_API_KEY=${NANOHUB_API_KEY}
+   NANOHUB_WEBHOOK_HMAC_KEY=${NANOHUB_API_KEY}
+   EOF
+   chmod 600 /opt/nanohub/secrets/*.env
+   ```
+3. Restartovat služby:
+   ```bash
+   sudo systemctl restart nanohub nanodep mdm-flask-api
+   ```
+
+### Git bezpečnost
+
+**Nikdy nepřidávat do git:**
+- `/opt/nanohub/environment.sh`
+- `/opt/nanohub/secrets/`
+- Jakýkoliv soubor s reálnými hesly
+
+Tyto položky jsou v `.gitignore`.

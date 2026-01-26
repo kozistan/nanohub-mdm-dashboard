@@ -1,0 +1,47 @@
+[Unit]
+Description=NanoHUB MDM Server
+Requires=docker.service
+After=docker.service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=microm
+Group=docker
+WorkingDirectory=/home/microm/nanohub
+Environment=HOME=/home/microm
+# Start MySQL container
+ExecStartPre=-/bin/bash -c '/usr/bin/docker stop mysql-nanohub 2>/dev/null || true'
+ExecStartPre=-/bin/bash -c '/usr/bin/docker rm mysql-nanohub 2>/dev/null || true'
+ExecStartPre=/usr/bin/docker run -d --name mysql-nanohub \
+  --network host \
+  --env-file /opt/nanohub/secrets/mysql.env \
+  -v f0dc90ed5527b44cef1ca860c04beb38636423fbd3c9d00a1ca3cd7fcc694aba:/var/lib/mysql \
+  mysql:8.0 \
+  --innodb-buffer-pool-size=512M
+ExecStartPre=/bin/bash -c '\
+  until /usr/bin/docker exec mysql-nanohub bash -c "mysqladmin ping -h localhost -u root -p\$$MYSQL_ROOT_PASSWORD --silent" 2>/dev/null; do sleep 2; done'
+# Start NanoHUB container
+ExecStartPre=-/bin/bash -c '/usr/bin/docker stop nanohub 2>/dev/null || true'
+ExecStartPre=-/bin/bash -c '/usr/bin/docker rm nanohub 2>/dev/null || true'
+ExecStart=/usr/bin/docker run --rm --name nanohub \
+  --network host \
+  --env-file /opt/nanohub/secrets/nanohub.env \
+  -v /etc/localtime:/etc/localtime:ro \
+  -v /etc/timezone:/etc/timezone:ro \
+  -v /home/microm/nanohub/certs:/certs \
+  ghcr.io/micromdm/nanohub:main \
+  -storage mysql \
+  -ca /certs/combined_scep_ca.pem \
+  -migration \
+  -retro \
+  -webhook-url http://localhost:5001/webhook
+StandardOutput=append:/var/log/nanohub/nanohub.log
+StandardError=append:/var/log/nanohub/nanohub.log
+ExecStop=/usr/bin/docker stop nanohub
+ExecStopPost=-/usr/bin/docker stop mysql-nanohub
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
