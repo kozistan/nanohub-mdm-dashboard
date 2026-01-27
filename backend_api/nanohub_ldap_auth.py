@@ -58,11 +58,11 @@ LDAP_CONFIG = {
 # To generate: python3 -c "import hashlib; print(hashlib.sha256('username:PASSWORD:nanohub-salt'.encode()).hexdigest())"
 # Set NANOHUB_LOCAL_ADMIN_HASH env var to enable local fallback login
 LOCAL_USERS = {
-    'hdadmin': {
+    'nanoadmin': {
         'password_hash': os.environ.get('NANOHUB_LOCAL_ADMIN_HASH',
-                         '5a67173b0c77a27c82bc66aad91d84ab9d50710b6dc3dddc53a5f6841a047489'),
+                         '80f7348a1ecf0c91349afa58fac57a3537b6fef2cccdc0370d0e068ae49ef3c2'),
         'role': 'admin',
-        'display_name': 'Local Admin',
+        'display_name': 'NanoAdmin',
         'permissions': ['admin', 'operator', 'report', 'settings', 'users'],
     }
 }
