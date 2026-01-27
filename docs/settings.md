@@ -292,42 +292,42 @@ chmod 755 /opt/nanohub/backend_api/*.py
 
 ## Secrets Management
 
-**DŮLEŽITÉ:** Žádné heslo ani token nesmí být hardcoded v konfiguračních souborech nebo systemd službách.
+**IMPORTANT:** No password or token should ever be hardcoded in configuration files or systemd service files.
 
-### Struktura
+### Structure
 
 ```
 /opt/nanohub/
-├── environment.sh          # Hlavní zdroj credentials (source pro skripty)
-└── secrets/                # Docker env soubory (chmod 700)
+├── environment.sh          # Primary credential source (sourced by scripts)
+└── secrets/                # Docker env files (chmod 700)
     ├── mysql.env           # MYSQL_ROOT_PASSWORD, MYSQL_USER, etc.
     ├── nanohub.env         # NANOHUB_STORAGE_DSN, NANOHUB_API_KEY
     └── nanodep.env         # NANODEP_STORAGE_DSN, NANODEP_API
 ```
 
-### Pravidla
+### Rules
 
-| Co | Kam | Jak |
-|----|-----|-----|
-| DB hesla | `environment.sh`, `secrets/*.env` | Nikdy do service souborů |
-| API keys | `environment.sh`, `secrets/*.env` | Nikdy do git |
-| Tokeny (VPP, Telegram) | `environment.sh` | Pouze env variables |
+| What | Where | How |
+|------|-------|-----|
+| DB passwords | `environment.sh`, `secrets/*.env` | Never in service files |
+| API keys | `environment.sh`, `secrets/*.env` | Never in git |
+| Tokens (VPP, Telegram) | `environment.sh` | Environment variables only |
 
-### Systemd služby
+### Systemd Services
 
-Služby používají `--env-file` místo hardcoded hodnot:
+Services use `--env-file` instead of hardcoded values:
 
 ```ini
-# Správně
+# Correct
 ExecStart=/usr/bin/docker run --env-file /opt/nanohub/secrets/nanohub.env ...
 
-# Špatně (heslo viditelné v ps aux)
+# Wrong (password visible in ps aux)
 ExecStart=/usr/bin/docker run ... -storage-dsn "user:password@tcp(...)"
 ```
 
-### Skripty
+### Scripts
 
-Bash skripty čtou z `environment.sh`:
+Bash scripts read from `environment.sh`:
 
 ```bash
 #!/bin/bash
@@ -335,10 +335,10 @@ source /opt/nanohub/environment.sh
 mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -e "..."
 ```
 
-### Po změně hesla
+### After Changing a Password
 
-1. Aktualizovat `/opt/nanohub/environment.sh`
-2. Regenerovat secrets soubory:
+1. Update `/opt/nanohub/environment.sh`
+2. Regenerate secrets files:
    ```bash
    source /opt/nanohub/environment.sh
    cat > /opt/nanohub/secrets/nanohub.env << EOF
@@ -348,16 +348,16 @@ mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -e "..."
    EOF
    chmod 600 /opt/nanohub/secrets/*.env
    ```
-3. Restartovat služby:
+3. Restart services:
    ```bash
    sudo systemctl restart nanohub nanodep mdm-flask-api
    ```
 
-### Git bezpečnost
+### Git Security
 
-**Nikdy nepřidávat do git:**
+**Never add to git:**
 - `/opt/nanohub/environment.sh`
 - `/opt/nanohub/secrets/`
-- Jakýkoliv soubor s reálnými hesly
+- Any file containing real passwords
 
-Tyto položky jsou v `.gitignore`.
+These items are listed in `.gitignore`.
