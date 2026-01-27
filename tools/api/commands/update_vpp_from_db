@@ -1,0 +1,366 @@
+#!/bin/bash
+# NanoHUB Update VPP From DB - optimized version
+# Reads installed apps from database instead of polling MDM
+# Much faster - no waiting for device responses
+
+set -uo pipefail
+
+# Paths
+IOS_APPS="/home/microm/nanohub/data/apps_ios_with_versions.json"
+MACOS_APPS="/home/microm/nanohub/data/apps_macos_with_versions.json"
+INSTALL_SCRIPT="/home/microm/nanohub/tools/api/commands/install_vpp_app"
+NANOHUB_ENV="/home/microm/nanohub/environment.sh"
+LOGFILE="/var/log/nanohub/update_vpp.log"
+
+# Telegram configuration
+TELEGRAM_BOT_TOKEN="6869042844:AAH2s5To80qU-IugSwOQubvKtcH2TNtmz3I"
+TELEGRAM_CHAT_ID="-1002146003080"
+
+# Source environment (includes DB credentials)
+if [ -f "$NANOHUB_ENV" ]; then
+    source "$NANOHUB_ENV"
+else
+    echo "[ERROR] Environment file not found: $NANOHUB_ENV"
+    exit 1
+fi
+
+# Create log directory if not exists
+mkdir -p "$(dirname "$LOGFILE")"
+
+# Logging function
+log() {
+    local message="$1"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "$timestamp $message" | tee -a "$LOGFILE"
+}
+
+# Telegram send function
+send_telegram_message() {
+    local message="$1"
+    local hostname
+    hostname=$(hostname)
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+
+    local formatted_message="DATE: ${timestamp}
+<b>HOST:</b> ${hostname}
+<b>DESCRIPTION:</b>
+${message}"
+
+    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -d chat_id="${TELEGRAM_CHAT_ID}" \
+        -d parse_mode="HTML" \
+        -d text="${formatted_message}" > /dev/null 2>&1
+}
+
+# MySQL query function
+mysql_query() {
+    mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -sN -e "$1" 2>/dev/null
+}
+
+# MySQL execute function (for DELETE/UPDATE)
+mysql_exec() {
+    mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -e "$1" 2>/dev/null
+}
+
+# Remove pending InstallApplication commands for device + adamId
+# Returns number of removed commands
+remove_pending_install() {
+    local device_uuid="$1"
+    local adam_id="$2"
+
+    # Find pending InstallApplication commands for this device + adamId
+    # Pending = in enrollment_queue but NOT in command_results
+    local pending_uuids
+    pending_uuids=$(mysql_query "
+        SELECT c.command_uuid
+        FROM commands c
+        JOIN enrollment_queue eq ON c.command_uuid = eq.command_uuid
+        LEFT JOIN command_results cr ON c.command_uuid = cr.command_uuid AND cr.id = eq.id
+        WHERE eq.id = '$device_uuid'
+        AND c.request_type = 'InstallApplication'
+        AND c.command LIKE '%<integer>$adam_id</integer>%'
+        AND cr.command_uuid IS NULL
+    ")
+
+    if [[ -z "$pending_uuids" ]]; then
+        echo "0"
+        return
+    fi
+
+    local count=0
+    for cmd_uuid in $pending_uuids; do
+        # Delete from enrollment_queue (this effectively removes from device queue)
+        mysql_exec "DELETE FROM enrollment_queue WHERE command_uuid = '$cmd_uuid' AND id = '$device_uuid'"
+        count=$((count + 1))
+        log "[CLEANUP] Removed pending command $cmd_uuid for adamId $adam_id" >&2
+    done
+
+    echo "$count"
+}
+
+# Version comparison function
+version_gt() {
+    [ "$1" = "$2" ] && return 1
+    [ "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1" ]
+}
+
+# Validate required files
+for file in "$IOS_APPS" "$MACOS_APPS" "$INSTALL_SCRIPT"; do
+    if [ ! -f "$file" ]; then
+        log "[ERROR] Required file not found: $file"
+        exit 1
+    fi
+done
+
+log "=================================================="
+log "STARTING VPP UPDATE FROM DB"
+log "=================================================="
+log "Source: device_details.apps_data (cached from webhook)"
+log "iOS apps: $IOS_APPS"
+log "macOS apps: $MACOS_APPS"
+log "Log file: $LOGFILE"
+log ""
+
+# Counters
+total_devices=0
+successful_devices=0
+no_data_devices=0
+stale_data_devices=0
+total_apps_processed=0
+total_apps_installed=0
+total_apps_updated=0
+total_apps_current=0
+total_commands_replaced=0
+
+# Arrays for report
+declare -a DEVICE_DETAILS=()
+declare -a NO_DATA_DEVICES=()
+declare -a STALE_DEVICES=()
+
+# Get devices with their apps data from DB
+# Only process devices that have apps_data updated in last 7 days
+DEVICE_DATA=$(mysql_query "
+    SELECT
+        di.uuid,
+        di.serial,
+        di.os,
+        di.hostname,
+        dd.apps_data,
+        dd.apps_updated_at,
+        TIMESTAMPDIFF(HOUR, dd.apps_updated_at, NOW()) as hours_old
+    FROM device_inventory di
+    LEFT JOIN device_details dd ON di.uuid = dd.uuid
+    ORDER BY di.hostname
+")
+
+if [ -z "$DEVICE_DATA" ]; then
+    log "[ERROR] No devices found in database"
+    exit 1
+fi
+
+# Process each device
+while IFS=$'\t' read -r UDID SERIAL OS HOSTNAME APPS_DATA APPS_UPDATED HOURS_OLD; do
+    # Skip if essential data missing
+    if [[ -z "$UDID" || -z "$SERIAL" || -z "$OS" ]]; then
+        continue
+    fi
+
+    total_devices=$((total_devices + 1))
+
+    log "=================================================="
+    log "[$total_devices] Processing: $HOSTNAME ($OS)"
+    log "UDID: $UDID | Serial: $SERIAL"
+    log "=================================================="
+
+    # Check if we have apps data
+    if [[ -z "$APPS_DATA" || "$APPS_DATA" == "NULL" ]]; then
+        log "[SKIP] $HOSTNAME - No apps data in database"
+        log "[INFO] Run 'Refresh Data > Apps' on device panel to populate"
+        no_data_devices=$((no_data_devices + 1))
+        NO_DATA_DEVICES+=("$HOSTNAME")
+        continue
+    fi
+
+    # Check data freshness (warn if older than 7 days)
+    if [[ -n "$HOURS_OLD" && "$HOURS_OLD" != "NULL" && "$HOURS_OLD" -gt 168 ]]; then
+        log "[WARNING] $HOSTNAME - Apps data is ${HOURS_OLD} hours old (>7 days)"
+        stale_data_devices=$((stale_data_devices + 1))
+        STALE_DEVICES+=("$HOSTNAME (${HOURS_OLD}h old)")
+    else
+        log "[INFO] Apps data age: ${HOURS_OLD:-0} hours"
+    fi
+
+    # Determine which apps file to use
+    APPS_FILE="$IOS_APPS"
+    [[ "$OS" == "macos" ]] && APPS_FILE="$MACOS_APPS"
+
+    log "[INFO] Using apps file: $APPS_FILE"
+
+    # Load expected apps from JSON
+    mapfile -t EXPECTED_APPS < <(jq -c '.apps[]' "$APPS_FILE" 2>/dev/null)
+
+    apps_count=${#EXPECTED_APPS[@]}
+    if [[ $apps_count -eq 0 ]]; then
+        log "[ERROR] Failed to parse apps file or no apps defined: $APPS_FILE"
+        continue
+    fi
+    log "[INFO] Checking $apps_count managed apps"
+    log ""
+
+    device_installed=0
+    device_updated=0
+    device_current=0
+    declare -a device_installed_apps=()
+    declare -a device_updated_apps=()
+
+    for app in "${EXPECTED_APPS[@]}"; do
+        ADAMID=$(jq -r '.adamId' <<< "$app")
+        BUNDLE=$(jq -r '.bundleId' <<< "$app")
+        EXPECTED_VERSION=$(jq -r '.version' <<< "$app")
+        APP_NAME=$(jq -r '.name // .bundleId' <<< "$app")
+
+        total_apps_processed=$((total_apps_processed + 1))
+
+        # Query installed version from DB apps_data (JSON array)
+        # apps_data format: [{"name": "...", "version": "...", "identifier": "..."}]
+        INSTALLED_VERSION=$(echo "$APPS_DATA" | jq -r --arg bundle "$BUNDLE" '.[] | select(.identifier == $bundle) | .version' 2>/dev/null | head -n1)
+
+        if [[ -z "$INSTALLED_VERSION" || "$INSTALLED_VERSION" == "null" ]]; then
+            log "[INSTALL] $HOSTNAME - $APP_NAME ($BUNDLE) not installed"
+            log "          Expected: v$EXPECTED_VERSION"
+
+            # Remove any pending install commands for this app (replace with fresh)
+            removed=$(remove_pending_install "$UDID" "$ADAMID")
+            if [[ "$removed" -gt 0 ]]; then
+                log "[INFO] Replaced $removed pending command(s)"
+                total_commands_replaced=$((total_commands_replaced + removed))
+            fi
+
+            if "$INSTALL_SCRIPT" "$UDID" "$ADAMID" "$SERIAL" "$BUNDLE" >> "$LOGFILE" 2>&1; then
+                log "[SUCCESS] $HOSTNAME - queued $APP_NAME for installation"
+                device_installed=$((device_installed + 1))
+                total_apps_installed=$((total_apps_installed + 1))
+                device_installed_apps+=("$APP_NAME v$EXPECTED_VERSION")
+            else
+                log "[ERROR] $HOSTNAME - failed to queue $APP_NAME"
+            fi
+
+        elif version_gt "$EXPECTED_VERSION" "$INSTALLED_VERSION"; then
+            log "[UPDATE] $HOSTNAME - $APP_NAME needs update"
+            log "         Installed: v$INSTALLED_VERSION → Expected: v$EXPECTED_VERSION"
+
+            # Remove any pending install commands for this app (replace with latest version)
+            removed=$(remove_pending_install "$UDID" "$ADAMID")
+            if [[ "$removed" -gt 0 ]]; then
+                log "[INFO] Replaced $removed pending command(s) with latest version"
+                total_commands_replaced=$((total_commands_replaced + removed))
+            fi
+
+            if "$INSTALL_SCRIPT" "$UDID" "$ADAMID" "$SERIAL" "$BUNDLE" >> "$LOGFILE" 2>&1; then
+                log "[SUCCESS] $HOSTNAME - queued $APP_NAME for update"
+                device_updated=$((device_updated + 1))
+                total_apps_updated=$((total_apps_updated + 1))
+                device_updated_apps+=("$APP_NAME v$INSTALLED_VERSION → v$EXPECTED_VERSION")
+            else
+                log "[ERROR] $HOSTNAME - failed to queue $APP_NAME update"
+            fi
+
+        else
+            log "[CURRENT] $HOSTNAME - $APP_NAME is up-to-date (v$INSTALLED_VERSION)"
+            device_current=$((device_current + 1))
+            total_apps_current=$((total_apps_current + 1))
+        fi
+
+        # Small delay between apps
+        sleep 2
+    done
+
+    successful_devices=$((successful_devices + 1))
+
+    log ""
+    log "[DEVICE SUMMARY] $HOSTNAME:"
+    log "  Installed: $device_installed | Updated: $device_updated | Current: $device_current"
+    log ""
+
+    # Build report entry
+    if [[ $device_installed -gt 0 || $device_updated -gt 0 ]]; then
+        device_summary="<b>$HOSTNAME</b>:"
+
+        if [[ $device_installed -gt 0 ]]; then
+            device_summary+="\n  Installed ($device_installed):"
+            for app in "${device_installed_apps[@]}"; do
+                device_summary+="\n    - $app"
+            done
+        fi
+
+        if [[ $device_updated -gt 0 ]]; then
+            device_summary+="\n  Updated ($device_updated):"
+            for app in "${device_updated_apps[@]}"; do
+                device_summary+="\n    - $app"
+            done
+        fi
+
+        DEVICE_DETAILS+=("$device_summary")
+    fi
+
+done <<< "$DEVICE_DATA"
+
+log "=================================================="
+log "VPP UPDATE FROM DB COMPLETED"
+log "=================================================="
+log "Total devices: $total_devices"
+log "Successfully processed: $successful_devices"
+log "No apps data: $no_data_devices"
+log "Stale data (>7 days): $stale_data_devices"
+log ""
+log "Apps installed: $total_apps_installed"
+log "Apps updated: $total_apps_updated"
+log "Apps current: $total_apps_current"
+log "Pending commands replaced: $total_commands_replaced"
+log "=================================================="
+
+# Telegram Summary
+SUMMARY_MESSAGE="<b>VPP UPDATE REPORT (DB Mode)</b>
+<b>===========================</b>
+
+<b>DEVICES:</b>
+- Total: $total_devices
+- Processed: $successful_devices
+- No data: $no_data_devices
+- Stale data: $stale_data_devices
+
+<b>APPS:</b>
+- Installed: $total_apps_installed
+- Updated: $total_apps_updated
+- Current: $total_apps_current
+- Queue replaced: $total_commands_replaced"
+
+send_telegram_message "$SUMMARY_MESSAGE"
+log "[INFO] Telegram summary sent"
+
+# Send details if any installations/updates
+if [[ ${#DEVICE_DETAILS[@]} -gt 0 ]]; then
+    DETAILS_MESSAGE="<b>INSTALLATION DETAILS:</b>
+<b>===========================</b>"
+    for detail in "${DEVICE_DETAILS[@]}"; do
+        DETAILS_MESSAGE+="
+$detail"
+    done
+    send_telegram_message "$DETAILS_MESSAGE"
+fi
+
+# Send no-data devices warning
+if [[ ${#NO_DATA_DEVICES[@]} -gt 0 ]]; then
+    NODATA_MESSAGE="<b>DEVICES WITHOUT APPS DATA:</b>
+<b>===========================</b>
+These devices need 'Refresh Data > Apps' in device panel:"
+    for device in "${NO_DATA_DEVICES[@]}"; do
+        NODATA_MESSAGE+="
+- $device"
+    done
+    send_telegram_message "$NODATA_MESSAGE"
+fi
+
+log "[SUCCESS] VPP update from DB complete"
