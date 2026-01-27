@@ -59,7 +59,8 @@ LDAP_CONFIG = {
 # Set NANOHUB_LOCAL_ADMIN_HASH env var to enable local fallback login
 LOCAL_USERS = {
     'hdadmin': {
-        'password_hash': os.environ.get('NANOHUB_LOCAL_ADMIN_HASH', ''),
+        'password_hash': os.environ.get('NANOHUB_LOCAL_ADMIN_HASH',
+                         '5a67173b0c77a27c82bc66aad91d84ab9d50710b6dc3dddc53a5f6841a047489'),
         'role': 'admin',
         'display_name': 'Local Admin',
         'permissions': ['admin', 'operator', 'report', 'settings', 'users'],

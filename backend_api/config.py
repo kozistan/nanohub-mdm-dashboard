@@ -118,8 +118,11 @@ class Config:
     # ==========================================================================
 
     LDAP_SERVERS = [
-        {'host': os.environ.get('LDAP_HOST_1', ''), 'port': 389},
-        {'host': os.environ.get('LDAP_HOST_2', ''), 'port': 389},
+        s for s in [
+            {'host': os.environ.get('LDAP_HOST_1', ''), 'port': 389},
+            {'host': os.environ.get('LDAP_HOST_2', ''), 'port': 389},
+            {'host': os.environ.get('LDAP_HOST_3', ''), 'port': 389},
+        ] if s['host']
     ]
     LDAP_USE_SSL = False
     LDAP_USE_STARTTLS = True
