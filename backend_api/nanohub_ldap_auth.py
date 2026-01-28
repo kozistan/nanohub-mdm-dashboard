@@ -51,18 +51,22 @@ LDAP_CONFIG = {
 }
 
 # =============================================================================
-# LOCAL FALLBACK USER (when AD is unavailable)
+# LOCAL USER AUTHENTICATION (database-backed)
 # =============================================================================
 
-# Hash: sha256(username + password + salt)
-# To generate: python3 -c "import hashlib; print(hashlib.sha256('username:PASSWORD:nanohub-salt'.encode()).hexdigest())"
-# Set NANOHUB_LOCAL_ADMIN_HASH env var to enable local fallback login
-LOCAL_USERS = {
-    'nanoadmin': {
-        'password_hash': os.environ.get('NANOHUB_LOCAL_ADMIN_HASH',
-                         '80f7348a1ecf0c91349afa58fac57a3537b6fef2cccdc0370d0e068ae49ef3c2'),
+# Import database local users
+try:
+    from db_utils import local_users as db_local_users
+except ImportError:
+    db_local_users = None
+    logger.warning("db_utils.local_users not available, database local users disabled")
+
+# Emergency fallback user (used only if database is completely unavailable)
+EMERGENCY_FALLBACK_USER = {
+    'admin': {
+        'password_hash': hashlib.sha256('admin:password:nanohub-salt'.encode()).hexdigest(),
         'role': 'admin',
-        'display_name': 'NanoAdmin',
+        'display_name': 'Local Admin',
         'permissions': ['admin', 'operator', 'report', 'settings', 'users'],
     }
 }
@@ -255,7 +259,7 @@ def apply_database_role_override(user_info: dict) -> dict:
 
 def local_authenticate(username, password):
     """
-    Authenticate against local users (fallback when AD is unavailable).
+    Authenticate against local users (database-backed with emergency fallback).
     Returns user_info dict or None.
     """
     if not username or not password:
@@ -263,32 +267,49 @@ def local_authenticate(username, password):
 
     username = username.strip().lower()
 
-    if username not in LOCAL_USERS:
-        return None
+    # 1. Try database-backed local users
+    if db_local_users:
+        try:
+            row = db_local_users.authenticate(username, password)
+            if row:
+                user_info = {
+                    'username': row['username'],
+                    'display_name': row.get('display_name') or row['username'],
+                    'email': None,
+                    'dn': f'LOCAL:{row["username"]}',
+                    'role': row['role'],
+                    'groups': ['local-user'],
+                    'permissions': ROLE_PERMISSIONS.get(row['role'], []),
+                    'manifest_filter': row.get('manifest_filter'),
+                    'is_local': True,
+                    'must_change_password': bool(row.get('must_change_password', 0)),
+                }
+                logger.info(f"Local user {username} authenticated via database")
+                return user_info
+        except Exception as e:
+            logger.error(f"Database local auth failed, trying emergency fallback: {e}")
 
-    local_user = LOCAL_USERS[username]
+    # 2. Emergency fallback (only if DB is unavailable)
+    if username in EMERGENCY_FALLBACK_USER:
+        fallback = EMERGENCY_FALLBACK_USER[username]
+        password_hash = hashlib.sha256(f'{username}:{password}:nanohub-salt'.encode()).hexdigest()
+        if password_hash == fallback['password_hash']:
+            user_info = {
+                'username': username,
+                'display_name': fallback.get('display_name', username),
+                'email': None,
+                'dn': f'LOCAL:{username}',
+                'role': fallback['role'],
+                'groups': ['local-admin'],
+                'permissions': fallback['permissions'],
+                'manifest_filter': None,
+                'is_local': True,
+                'must_change_password': False,
+            }
+            logger.warning(f"Local user {username} authenticated via EMERGENCY fallback")
+            return user_info
 
-    # Compute hash and compare
-    password_hash = hashlib.sha256(f'{username}:{password}:nanohub-salt'.encode()).hexdigest()
-
-    if password_hash != local_user['password_hash']:
-        logger.warning(f"Invalid password for local user: {username}")
-        return None
-
-    user_info = {
-        'username': username,
-        'display_name': local_user.get('display_name', username),
-        'email': None,
-        'dn': f'LOCAL:{username}',
-        'role': local_user['role'],
-        'groups': ['local-admin'],
-        'permissions': local_user['permissions'],
-        'manifest_filter': None,  # Local admin has full access
-        'is_local': True,  # Flag to identify local user
-    }
-
-    logger.info(f"Local user {username} authenticated successfully")
-    return user_info
+    return None
 
 
 # =============================================================================
@@ -674,6 +695,76 @@ ERROR_403_TEMPLATE = '''
 </html>
 '''
 
+CHANGE_PASSWORD_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Change Password - NanoHUB</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/dashboard.css">
+    <link rel="stylesheet" href="/static/css/qbone.css">
+    <link rel="stylesheet" href="/static/css/admin.css">
+    <link rel="shortcut icon" href="/static/favicon.ico">
+    <style>
+        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .login-panel { max-width: 420px; width: 100%; }
+        .login-panel h1 { margin-bottom: 8px; }
+        .login-panel .subtitle { color: #B0B0B0; font-size: 0.95em; margin-bottom: 25px; }
+        .form-group { margin-bottom: 18px; text-align: left; }
+        .form-group label { display: block; margin-bottom: 6px; color: #FFFFFF; font-weight: 500; font-size: 0.95em; }
+        .form-group input { width: 100%; box-sizing: border-box; }
+        .btn-login { width: 100%; margin-top: 10px; padding: 12px 20px; font-size: 1em; }
+        .btn-login.red { background: #5FC812; color: #0D0D0D; }
+        .btn-login.red:hover { background: #A5F36C; }
+        .warning-box { background: rgba(245,166,35,0.15); border: 1px solid #F5A623; color: #F5A623; padding: 12px; border-radius: 6px; margin-bottom: 20px; font-size: 0.9em; }
+        .back-link { margin-top: 15px; text-align: center; }
+        .back-link a { color: #B0B0B0; font-size: 0.85em; text-decoration: none; }
+        .back-link a:hover { color: #FFFFFF; }
+    </style>
+</head>
+<body>
+    <div class="panel login-panel">
+        <h1>Change Password</h1>
+        {% if forced %}
+        <div class="warning-box">You must change your password before continuing.</div>
+        {% else %}
+        <p class="subtitle">Update your local account password</p>
+        {% endif %}
+
+        {% if error %}
+        <div class="panel-error" style="display:block;">{{ error }}</div>
+        {% endif %}
+        {% if success %}
+        <div style="background:rgba(95,200,18,0.15);border:1px solid #5FC812;color:#5FC812;padding:12px;border-radius:6px;margin-bottom:20px;font-size:0.9em;">{{ success }}</div>
+        {% endif %}
+
+        <form method="POST" action="/change-password">
+            <div class="form-group">
+                <label for="current_password">Current Password</label>
+                <input type="password" id="current_password" name="current_password" required autofocus>
+            </div>
+            <div class="form-group">
+                <label for="new_password">New Password</label>
+                <input type="password" id="new_password" name="new_password" required minlength="6">
+            </div>
+            <div class="form-group">
+                <label for="confirm_password">Confirm New Password</label>
+                <input type="password" id="confirm_password" name="confirm_password" required minlength="6">
+            </div>
+            <button type="submit" class="btn btn-login red">Change Password</button>
+        </form>
+        {% if not forced %}
+        <div class="back-link"><a href="/">Back to Dashboard</a></div>
+        {% endif %}
+    </div>
+</body>
+</html>
+'''
+
 
 # =============================================================================
 # FLASK ROUTES
@@ -682,6 +773,68 @@ ERROR_403_TEMPLATE = '''
 def register_auth_routes(app):
     # Initialize Google OAuth
     init_google_oauth(app)
+
+    @app.before_request
+    def check_must_change_password():
+        """Force local users to change password if must_change_password is set."""
+        user = session.get('user')
+        if not user:
+            return None
+        if not user.get('is_local'):
+            return None
+        if not user.get('must_change_password'):
+            return None
+        # Allow access to change-password, logout, and static files
+        if request.endpoint in ('change_password', 'logout', 'static'):
+            return None
+        return redirect('/change-password')
+
+    @app.route('/change-password', methods=['GET', 'POST'])
+    def change_password():
+        """Change password for local users."""
+        user = session.get('user')
+        if not user:
+            return redirect(url_for('login'))
+        if not user.get('is_local'):
+            flash('Password change is only available for local users')
+            return redirect('/')
+
+        forced = user.get('must_change_password', False)
+        error = None
+        success = None
+
+        if request.method == 'POST':
+            current_password = request.form.get('current_password', '')
+            new_password = request.form.get('new_password', '')
+            confirm_password = request.form.get('confirm_password', '')
+
+            # Validate current password
+            if db_local_users:
+                check = db_local_users.authenticate(user['username'], current_password)
+                if not check:
+                    error = 'Current password is incorrect'
+            else:
+                error = 'Local user database not available'
+
+            if not error:
+                if len(new_password) < 6:
+                    error = 'New password must be at least 6 characters'
+                elif new_password != confirm_password:
+                    error = 'New passwords do not match'
+                elif current_password == new_password:
+                    error = 'New password must be different from current password'
+
+            if not error:
+                if db_local_users and db_local_users.change_password(user['username'], new_password):
+                    # Update session
+                    session['user']['must_change_password'] = False
+                    logger.info(f"Password changed for local user: {user['username']}")
+                    return redirect('/')
+                else:
+                    error = 'Failed to change password'
+
+        return render_template_string(CHANGE_PASSWORD_TEMPLATE,
+                                     forced=forced, error=error, success=success)
 
     @app.route('/login', methods=['GET', 'POST'])
     def login():
@@ -713,6 +866,11 @@ def register_auth_routes(app):
                 auth_type = 'local' if user_info.get('is_local') else 'LDAP'
                 role_source = user_info.get('role_source', auth_type)
                 logger.info(f"User {username} logged in successfully via {auth_type} (role: {user_info.get('role')} from {role_source})")
+
+                # Force password change for local users if required
+                if user_info.get('must_change_password'):
+                    return redirect('/change-password')
+
                 return redirect(next_url)
             else:
                 error = 'Invalid credentials or you are not a member of an authorized group'

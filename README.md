@@ -5,7 +5,8 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 ## Features
 
 ### Core Features
-- **Multi-Auth Support**: Google SSO, LDAP/AD, and local fallback authentication
+- **Multi-Auth Support**: Local users, Google SSO, and LDAP/AD authentication
+- **Local User Management**: Database-backed local accounts with forced password change
 - **Google SSO**: OAuth 2.0 Single Sign-On via Google Workspace
 - **LDAP Authentication**: Active Directory login with role-based access control
 - **SQL-Based Device Management**: Fast, scalable MySQL device database
@@ -44,6 +45,7 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
   - `help.py` - Help documentation
 - **Manifest Management**: Database-backed manifests with CRUD operations
 - **User Role Management**: Database-stored role overrides with CLI tool
+- **Local User Management**: Create/edit/delete local users via Settings UI
 
 ### VPP Panel
 - **Token Management**: VPP token status with expiration warnings
@@ -91,9 +93,11 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 
 | Method | Description |
 |--------|-------------|
-| Google SSO | OAuth 2.0 via Google Workspace (primary when configured) |
+| Local Users | Database-backed accounts (default: `admin` / `password`, forced change) |
 | LDAP/AD | Active Directory domain login |
-| Local User | Fallback admin account (hdadmin) |
+| Google SSO | OAuth 2.0 via Google Workspace (primary when configured) |
+
+Authentication order: local users first, then LDAP. Google SSO uses a separate flow.
 
 **LDAP Group Mapping:**
 
@@ -335,6 +339,25 @@ CREATE TABLE IF NOT EXISTS manifests (
     INDEX idx_name (name)
 );
 
+-- Local users table (auto-created on startup, default admin user auto-seeded)
+CREATE TABLE IF NOT EXISTS local_users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    password_hash VARCHAR(64) NOT NULL,
+    display_name VARCHAR(200) DEFAULT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'operator',
+    manifest_filter VARCHAR(100) DEFAULT NULL,
+    is_active TINYINT(1) DEFAULT 1,
+    must_change_password TINYINT(1) DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    created_by VARCHAR(100) DEFAULT NULL,
+    last_login TIMESTAMP NULL DEFAULT NULL,
+    notes TEXT DEFAULT NULL,
+    INDEX idx_username (username),
+    INDEX idx_active (is_active)
+);
+
 -- User roles table
 CREATE TABLE IF NOT EXISTS user_roles (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -523,10 +546,11 @@ To add a new restricted admin role:
 - **Reports**: `https://mdm.example.com:8000/admin/reports`
 - **Help**: `https://mdm.example.com:8000/admin/help`
 - **Login**: `https://mdm.example.com:8000/login`
+- **Change Password**: `https://mdm.example.com:8000/change-password` (local users)
 
 ### Admin Panel Operations
 
-1. Login with AD credentials
+1. Login with local or AD credentials
 2. Navigate to Admin Panel
 3. Select category and command
 4. Fill in required parameters
@@ -577,6 +601,7 @@ Admin command for managing applications in database:
 - `POST /login` - Authenticate user
 - `GET /logout` - Logout user
 - `GET /auth/check` - Check authentication status
+- `GET/POST /change-password` - Change password (local users, forced on first login)
 
 ### Admin Panel
 - `GET /admin` - Admin dashboard

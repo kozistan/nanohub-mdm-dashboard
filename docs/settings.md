@@ -35,9 +35,52 @@ Bulk assign devices to manifest:
 2. Select devices
 3. Apply assignment
 
-## User Role Management
+## Local User Management
 
-Override LDAP-derived roles for specific users.
+Database-backed local user accounts for authentication when LDAP/SSO is unavailable.
+
+**Admin Panel > Settings > Users**
+
+### Default Admin
+
+On first startup, a default local user is created automatically:
+- **Username:** `admin`
+- **Password:** `password`
+- **Role:** `admin`
+- **Must change password:** Yes (forced on first login)
+
+### Add Local User
+
+| Field | Description |
+|-------|-------------|
+| Username | Unique login name (lowercase) |
+| Display Name | Full name (optional) |
+| Password | Minimum 6 characters |
+| Role | admin, bel-admin, operator, report |
+| Manifest Filter | SQL LIKE pattern for device filtering (optional) |
+| Notes | Optional description |
+| Force PW change | User must change password on next login |
+
+### Password Management
+
+- **Change Password** - Users can change their own password at `/change-password`
+- **Forced Change** - When `must_change_password` is set, user is redirected to change password before accessing any page
+- **Admin Reset** - Admins can reset any user's password from Settings > Users (sets forced change)
+- **Password hash** - SHA256 of `username:password:nanohub-salt`
+
+### Emergency Fallback
+
+If the database is completely unavailable, an emergency fallback user `admin` / `password` is hardcoded for recovery access. This only activates when DB authentication fails entirely.
+
+### Database Table
+
+`local_users` - auto-created on startup. See [Database Schema](database) for details.
+
+## Users Role Overrides
+
+Override roles for LDAP and Google SSO users. The override takes precedence over the role derived from AD group membership or SSO default.
+
+**Admin Panel > Settings > Users**
 
 ### View Users
 
@@ -60,7 +103,7 @@ Manifest Filter: site-a (optional)
 | Role | Permissions |
 |------|-------------|
 | admin | Full access to all devices |
-| restricted-admin | Full access, filtered by manifest |
+| bel-admin | Full access, filtered by manifest |
 | operator | Device management, profiles, apps |
 | report | Read-only access |
 
@@ -77,7 +120,7 @@ python manage_roles.py list
 python manage_roles.py add username admin
 
 # Add with manifest filter
-python manage_roles.py add username restricted-admin --manifest "site-%"
+python manage_roles.py add username bel-admin --manifest "%-bel"
 
 # Remove override
 python manage_roles.py remove username
@@ -162,9 +205,11 @@ NanoHUB supports three authentication methods:
 
 | Method | Description | Priority |
 |--------|-------------|----------|
-| **Google SSO** | OAuth 2.0 login via Google Workspace | Primary (when configured) |
-| **LDAP/AD** | Active Directory domain login | Secondary |
-| **Local User** | Fallback admin account (hdadmin) | Fallback |
+| **Local Users** | Database-backed local accounts | First (always available) |
+| **LDAP/AD** | Active Directory domain login | Second |
+| **Google SSO** | OAuth 2.0 login via Google Workspace | Primary button (when configured) |
+
+Authentication order on login: local users are checked first, then LDAP. Google SSO uses a separate button/flow.
 
 ### Google SSO (OAuth 2.0)
 
@@ -203,18 +248,14 @@ Domain authentication against Active Directory.
 
 See LDAP Group Mapping section below for role configuration.
 
-### Local Fallback User
+### Local Users (Database)
 
-Emergency access when AD is unavailable.
+Database-backed local accounts managed via Settings > Users.
 
-- Username: `hdadmin`
-- Password hash set via `NANOHUB_LOCAL_ADMIN_HASH` environment variable
-- Role: `admin` (full access)
-
-Generate hash:
-```bash
-python3 -c "import hashlib; print(hashlib.sha256('hdadmin:YOUR_PASSWORD:nanohub-salt'.encode()).hexdigest())"
-```
+- Default user: `admin` / `password` (forced password change on first login)
+- Supports multiple local users with different roles
+- Password stored as SHA256 hash in `local_users` table
+- See [Local User Management](#local-user-management) section above for details
 
 ## Configuration Files
 

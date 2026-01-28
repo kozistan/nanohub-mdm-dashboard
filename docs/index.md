@@ -36,14 +36,22 @@ Web-based management dashboard for Apple MDM with LDAP authentication.
 ### Admin Panel Modules
 
 ```
-nanohub_admin_core.py          # Main routes (dashboard, commands, history)
+nanohub_admin_core.py          # Blueprint registration only (~43 lines)
 nanohub_admin/
+├── __init__.py                # register_routes() - blueprint registration
 ├── core.py                    # Shared functions (device data, audit, VPP)
 ├── commands.py                # Command execution handlers
 ├── profiles.py                # Profile management
+├── utils.py                   # Decorators (login_required, admin_required)
 └── routes/                    # Feature blueprints
+    ├── dashboard.py           # Commands page, command execution
+    ├── history.py             # Command execution history
     ├── devices.py             # Device list & detail
-    ├── settings.py, reports.py, vpp.py, ddm.py, help.py
+    ├── settings.py            # Admin settings
+    ├── reports.py             # Statistics and reports
+    ├── vpp.py                 # VPP/App management
+    ├── ddm.py                 # Declarative Device Management
+    └── help.py                # Help documentation
 ```
 
 ## Role-Based Access Control
@@ -58,7 +66,8 @@ nanohub_admin/
 
 ## Key Features
 
-- **LDAP Authentication** - Active Directory login with role-based access
+- **Multi-Auth** - Local users, LDAP/AD, and Google SSO with role-based access
+- **Local User Management** - Database-backed users with forced password change
 - **Real-time Status** - Online/Active/Offline device indicators
 - **Parallel Execution** - 10-20x faster bulk operations
 - **DDM Support** - Declarative Device Management with KMFDDM

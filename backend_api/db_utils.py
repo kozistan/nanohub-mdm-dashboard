@@ -849,6 +849,230 @@ class UserRolesDB:
 
 
 # =============================================================================
+# LOCAL USERS
+# =============================================================================
+
+class LocalUsersDB:
+    """Database-backed local user management for fallback authentication."""
+
+    SALT = 'nanohub-salt'
+
+    def __init__(self, db_manager: DatabaseManager):
+        self.db = db_manager
+        self._ensure_table()
+        self._ensure_default_admin()
+
+    def _ensure_table(self):
+        """Create local_users table if it doesn't exist."""
+        try:
+            self.db.execute("""
+                CREATE TABLE IF NOT EXISTS local_users (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    username VARCHAR(100) NOT NULL UNIQUE,
+                    password_hash VARCHAR(64) NOT NULL,
+                    display_name VARCHAR(200) DEFAULT NULL,
+                    role VARCHAR(50) NOT NULL DEFAULT 'operator',
+                    manifest_filter VARCHAR(100) DEFAULT NULL,
+                    is_active TINYINT(1) DEFAULT 1,
+                    must_change_password TINYINT(1) DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    created_by VARCHAR(100) DEFAULT NULL,
+                    last_login TIMESTAMP NULL DEFAULT NULL,
+                    notes TEXT DEFAULT NULL,
+                    INDEX idx_username (username),
+                    INDEX idx_active (is_active)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+            logger.debug("local_users table ensured")
+        except Exception as e:
+            logger.error(f"Failed to create local_users table: {e}")
+
+    def _ensure_default_admin(self):
+        """Seed default admin user if no users exist."""
+        try:
+            existing = self.db.query_one(
+                "SELECT id FROM local_users WHERE username = %s", ('admin',)
+            )
+            if not existing:
+                self.db.execute("""
+                    INSERT INTO local_users (username, password_hash, display_name, role, must_change_password, created_by)
+                    VALUES (%s, %s, %s, %s, 1, %s)
+                """, (
+                    'admin',
+                    self.compute_hash('admin', 'password'),
+                    'Local Admin',
+                    'admin',
+                    'system'
+                ))
+                logger.info("Default admin local user created (admin/password)")
+        except Exception as e:
+            logger.error(f"Failed to ensure default admin: {e}")
+
+    @staticmethod
+    def compute_hash(username, password):
+        """Compute SHA256 hash for authentication."""
+        import hashlib
+        return hashlib.sha256(f'{username}:{password}:{LocalUsersDB.SALT}'.encode()).hexdigest()
+
+    def authenticate(self, username, password):
+        """Authenticate local user. Returns user row dict or None."""
+        if not username or not password:
+            return None
+
+        username = username.strip().lower()
+        password_hash = self.compute_hash(username, password)
+
+        try:
+            row = self.db.query_one("""
+                SELECT id, username, password_hash, display_name, role,
+                       manifest_filter, is_active, must_change_password, last_login, notes
+                FROM local_users
+                WHERE username = %s AND is_active = 1
+            """, (username,))
+
+            if not row:
+                return None
+
+            if row['password_hash'] != password_hash:
+                logger.warning(f"Invalid password for local user: {username}")
+                return None
+
+            # Update last_login
+            self.db.execute(
+                "UPDATE local_users SET last_login = NOW() WHERE username = %s",
+                (username,)
+            )
+
+            logger.info(f"Local user {username} authenticated successfully")
+            return row
+
+        except Exception as e:
+            logger.error(f"Local user authentication error: {e}")
+            return None
+
+    def get_user(self, username):
+        """Get single user by username."""
+        return self.db.query_one("""
+            SELECT id, username, display_name, role, manifest_filter,
+                   is_active, must_change_password, created_at, updated_at,
+                   created_by, last_login, notes
+            FROM local_users WHERE username = %s
+        """, (username.lower(),))
+
+    def get_all_users(self, include_inactive=False):
+        """Get all local users."""
+        if include_inactive:
+            return self.db.query_all("""
+                SELECT id, username, display_name, role, manifest_filter,
+                       is_active, must_change_password, created_at, updated_at,
+                       created_by, last_login, notes
+                FROM local_users ORDER BY username
+            """) or []
+        else:
+            return self.db.query_all("""
+                SELECT id, username, display_name, role, manifest_filter,
+                       is_active, must_change_password, created_at, updated_at,
+                       created_by, last_login, notes
+                FROM local_users WHERE is_active = 1 ORDER BY username
+            """) or []
+
+    def create_user(self, username, password, role='operator', display_name=None,
+                    manifest_filter=None, must_change_password=True, created_by=None, notes=None):
+        """Create a new local user."""
+        username = username.strip().lower()
+        password_hash = self.compute_hash(username, password)
+
+        try:
+            self.db.execute("""
+                INSERT INTO local_users (username, password_hash, display_name, role,
+                    manifest_filter, must_change_password, created_by, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (username, password_hash, display_name, role,
+                  manifest_filter or None, 1 if must_change_password else 0,
+                  created_by, notes or None))
+            logger.info(f"Local user created: {username} (role: {role}, by: {created_by})")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create local user {username}: {e}")
+            return False
+
+    def update_user(self, username, role=None, display_name=None,
+                    manifest_filter=None, is_active=None, notes=None):
+        """Update local user fields (not password)."""
+        username = username.strip().lower()
+        updates = {}
+        if role is not None:
+            updates['role'] = role
+        if display_name is not None:
+            updates['display_name'] = display_name
+        if manifest_filter is not None:
+            updates['manifest_filter'] = manifest_filter if manifest_filter else None
+        if is_active is not None:
+            updates['is_active'] = 1 if is_active else 0
+        if notes is not None:
+            updates['notes'] = notes if notes else None
+
+        if not updates:
+            return True
+
+        try:
+            self.db.update('local_users', updates, 'username = %s', (username,))
+            logger.info(f"Local user updated: {username}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update local user {username}: {e}")
+            return False
+
+    def change_password(self, username, new_password):
+        """Change password and clear must_change_password flag."""
+        username = username.strip().lower()
+        password_hash = self.compute_hash(username, new_password)
+
+        try:
+            self.db.execute("""
+                UPDATE local_users SET password_hash = %s, must_change_password = 0
+                WHERE username = %s
+            """, (password_hash, username))
+            logger.info(f"Password changed for local user: {username}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to change password for {username}: {e}")
+            return False
+
+    def reset_password(self, username, new_password, force_change=True):
+        """Admin password reset. Sets must_change_password flag."""
+        username = username.strip().lower()
+        password_hash = self.compute_hash(username, new_password)
+
+        try:
+            self.db.execute("""
+                UPDATE local_users SET password_hash = %s, must_change_password = %s
+                WHERE username = %s
+            """, (password_hash, 1 if force_change else 0, username))
+            logger.info(f"Password reset for local user: {username} (force_change={force_change})")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to reset password for {username}: {e}")
+            return False
+
+    def delete_user(self, username):
+        """Delete a local user. Cannot delete the admin user."""
+        username = username.strip().lower()
+        if username == 'admin':
+            logger.warning("Cannot delete the default admin user")
+            return False
+
+        try:
+            self.db.execute("DELETE FROM local_users WHERE username = %s", (username,))
+            logger.info(f"Local user deleted: {username}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete local user {username}: {e}")
+            return False
+
+
+# =============================================================================
 # APP SETTINGS DATABASE
 # =============================================================================
 
@@ -1050,4 +1274,5 @@ device_details = DeviceDetailsDB(db)
 required_profiles = RequiredProfilesDB(db)
 ddm_compliance = DDMComplianceDB(db)
 user_roles = UserRolesDB(db)
+local_users = LocalUsersDB(db)
 app_settings = AppSettingsDB(db)

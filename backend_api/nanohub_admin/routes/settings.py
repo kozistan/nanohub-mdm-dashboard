@@ -111,7 +111,7 @@ ADMIN_SETTINGS_TEMPLATE = '''
 
             <div class="settings-tabs">
                 <a href="#" onclick="showTab('system')" class="active" data-tab="system">System Info</a>
-                <a href="#" onclick="showTab('users')" data-tab="users">User Roles</a>
+                <a href="#" onclick="showTab('users')" data-tab="users">Users</a>
                 <a href="#" onclick="showTab('branding')" data-tab="branding">Logo/Branding</a>
                 <a href="#" onclick="showTab('manifests')" data-tab="manifests">Manifests</a>
                 <a href="#" onclick="showTab('session')" data-tab="session">Session</a>
@@ -161,10 +161,83 @@ ADMIN_SETTINGS_TEMPLATE = '''
                 </div>
             </div>
 
-            <!-- User Roles Tab -->
+            <!-- Users Tab (LDAP Role Overrides + Local Users) -->
             <div id="tab-users" class="settings-section">
-                <h3>User Role Overrides</h3>
-                <p style="font-size:0.85em;color:#6b7280;margin-bottom:15px;">Override LDAP-derived roles for specific users. Users without overrides use their LDAP group membership.</p>
+                <h3>Local Users</h3>
+                <p style="font-size:0.85em;color:#6b7280;margin-bottom:15px;">Manage local user accounts for authentication when LDAP/SSO is unavailable.</p>
+
+                <div class="settings-card">
+                    <h4 id="localUserFormTitle">Add Local User</h4>
+                    <input type="hidden" id="localEditMode" value="create">
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+                        <div>
+                            <label style="display:block;font-size:0.8em;margin-bottom:3px;">Username</label>
+                            <input type="text" id="localUsername" placeholder="username" style="width:150px;">
+                        </div>
+                        <div>
+                            <label style="display:block;font-size:0.8em;margin-bottom:3px;">Display Name</label>
+                            <input type="text" id="localDisplayName" placeholder="Full Name" style="width:150px;">
+                        </div>
+                        <div id="localPasswordGroup">
+                            <label style="display:block;font-size:0.8em;margin-bottom:3px;">Password</label>
+                            <input type="password" id="localPassword" placeholder="min 6 chars" style="width:130px;">
+                        </div>
+                        <div>
+                            <label style="display:block;font-size:0.8em;margin-bottom:3px;">Role</label>
+                            <select id="localRole" style="width:120px;">
+                                <option value="admin">admin</option>
+                                <option value="bel-admin">bel-admin</option>
+                                <option value="operator" selected>operator</option>
+                                <option value="report">report</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="display:block;font-size:0.8em;margin-bottom:3px;">Manifest Filter</label>
+                            <input type="text" id="localFilter" placeholder="e.g. bel-%" style="width:120px;">
+                        </div>
+                        <div>
+                            <label style="display:block;font-size:0.8em;margin-bottom:3px;">Notes</label>
+                            <input type="text" id="localNotes" placeholder="Optional" style="width:130px;">
+                        </div>
+                        <div style="display:flex;align-items:center;gap:5px;">
+                            <input type="checkbox" id="localForceChange" checked>
+                            <label for="localForceChange" style="font-size:0.8em;white-space:nowrap;">Force PW change</label>
+                        </div>
+                        <button class="btn btn-primary" onclick="saveLocalUser()">Save</button>
+                        <button class="btn" onclick="resetLocalForm()" style="display:none;" id="localCancelBtn">Cancel</button>
+                    </div>
+                </div>
+
+                <div class="settings-card">
+                    <h4>Current Local Users</h4>
+                    <div id="localUsersList">
+                        {% for lu in local_users_list %}
+                        <div class="user-role-row" data-username="{{ lu.username }}">
+                            <span class="username">{{ lu.username }}</span>
+                            <span class="role">{{ lu.role }}</span>
+                            <span class="filter">{{ lu.manifest_filter or 'No filter' }}</span>
+                            <span style="font-size:0.8em;color:#B0B0B0;">{{ lu.display_name or '' }}</span>
+                            {% if lu.must_change_password %}
+                            <span style="font-size:0.75em;color:#F5A623;border:1px solid #F5A623;padding:1px 6px;border-radius:8px;">PW change required</span>
+                            {% endif %}
+                            <span style="font-size:0.75em;color:#6b7280;">Last login: {{ lu.last_login.strftime('%Y-%m-%d %H:%M') if lu.last_login else 'Never' }}</span>
+                            <div class="actions">
+                                <button class="btn btn-small" onclick="editLocalUser('{{ lu.username }}', '{{ lu.display_name or '' }}', '{{ lu.role }}', '{{ lu.manifest_filter or '' }}', '{{ lu.notes or '' }}')">Edit</button>
+                                <button class="btn btn-small" onclick="resetLocalPassword('{{ lu.username }}')">Reset PW</button>
+                                {% if lu.username != 'admin' %}
+                                <button class="btn btn-small btn-danger" onclick="deleteLocalUser('{{ lu.username }}')">Delete</button>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                        {% if not local_users_list %}
+                        <p style="color:#6b7280;font-size:0.85em;">No local users found.</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <h3 style="margin-top:30px;">Users Role Overrides</h3>
+                <p style="font-size:0.85em;color:#6b7280;margin-bottom:15px;">Override roles for LDAP and Google SSO users. The override takes precedence over the role derived from AD group membership or SSO default.</p>
 
                 <div class="settings-card">
                     <h4>Add/Edit User Role</h4>
@@ -673,6 +746,100 @@ ADMIN_SETTINGS_TEMPLATE = '''
     function exportProfiles() {
         window.location.href = '/admin/api/settings/export/profiles';
     }
+
+    // Local Users functions
+    function resetLocalForm() {
+        document.getElementById('localEditMode').value = 'create';
+        document.getElementById('localUsername').value = '';
+        document.getElementById('localUsername').readOnly = false;
+        document.getElementById('localDisplayName').value = '';
+        document.getElementById('localPassword').value = '';
+        document.getElementById('localPasswordGroup').style.display = '';
+        document.getElementById('localRole').value = 'operator';
+        document.getElementById('localFilter').value = '';
+        document.getElementById('localNotes').value = '';
+        document.getElementById('localForceChange').checked = true;
+        document.getElementById('localUserFormTitle').textContent = 'Add Local User';
+        document.getElementById('localCancelBtn').style.display = 'none';
+    }
+
+    function saveLocalUser() {
+        const mode = document.getElementById('localEditMode').value;
+        const username = document.getElementById('localUsername').value.trim().toLowerCase();
+        const displayName = document.getElementById('localDisplayName').value.trim();
+        const password = document.getElementById('localPassword').value;
+        const role = document.getElementById('localRole').value;
+        const filter = document.getElementById('localFilter').value.trim();
+        const notes = document.getElementById('localNotes').value.trim();
+        const forceChange = document.getElementById('localForceChange').checked;
+
+        if (!username) { alert('Please enter a username'); return; }
+        if (mode === 'create' && password.length < 6) { alert('Password must be at least 6 characters'); return; }
+
+        const body = {username, display_name: displayName, role, filter, notes, force_change: forceChange, mode};
+        if (mode === 'create') body.password = password;
+
+        fetch('/admin/api/settings/local-user', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                alert(mode === 'create' ? 'Local user created' : 'Local user updated');
+                location.reload();
+            } else {
+                alert('Error: ' + data.error);
+            }
+        });
+    }
+
+    function editLocalUser(username, displayName, role, filter, notes) {
+        document.getElementById('localEditMode').value = 'edit';
+        document.getElementById('localUsername').value = username;
+        document.getElementById('localUsername').readOnly = true;
+        document.getElementById('localDisplayName').value = displayName;
+        document.getElementById('localPassword').value = '';
+        document.getElementById('localPasswordGroup').style.display = 'none';
+        document.getElementById('localRole').value = role;
+        document.getElementById('localFilter').value = filter;
+        document.getElementById('localNotes').value = notes;
+        document.getElementById('localUserFormTitle').textContent = 'Edit Local User: ' + username;
+        document.getElementById('localCancelBtn').style.display = '';
+        showTab('users');
+    }
+
+    function resetLocalPassword(username) {
+        const newPw = prompt('Enter new password for ' + username + ' (min 6 chars):');
+        if (!newPw) return;
+        if (newPw.length < 6) { alert('Password must be at least 6 characters'); return; }
+
+        fetch('/admin/api/settings/local-user/reset-password', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username, new_password: newPw})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                alert('Password reset. User will be forced to change it on next login.');
+                location.reload();
+            } else {
+                alert('Error: ' + data.error);
+            }
+        });
+    }
+
+    function deleteLocalUser(username) {
+        if (!confirm('Delete local user "' + username + '"? This cannot be undone.')) return;
+        fetch('/admin/api/settings/local-user/' + encodeURIComponent(username), {method: 'DELETE'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) location.reload();
+            else alert('Error: ' + data.error);
+        });
+    }
     </script>
 </body>
 </html>
@@ -768,6 +935,14 @@ def admin_settings():
     except Exception as e:
         logger.error(f"Failed to get user roles: {e}")
 
+    # Get local users
+    local_users_list = []
+    try:
+        from db_utils import local_users as local_users_db
+        local_users_list = local_users_db.get_all_users(include_inactive=True)
+    except Exception as e:
+        logger.error(f"Failed to get local users: {e}")
+
     # Get available logos from logos directory
     available_logos = []
     logo_dir = Config.LOGO_DIR
@@ -855,6 +1030,7 @@ def admin_settings():
         user=user,
         system_info=system_info,
         user_roles=user_roles_list,
+        local_users_list=local_users_list,
         available_logos=available_logos,
         current_logo=current_logo,
         manifests=manifests,
@@ -1304,3 +1480,117 @@ def api_settings_export_profiles():
                        headers={'Content-Disposition': 'attachment;filename=profiles_list.json'})
     except Exception as e:
         return f"Error: {e}", 500
+
+
+# =============================================================================
+# LOCAL USER MANAGEMENT API
+# =============================================================================
+
+@settings_bp.route('/api/settings/local-user', methods=['POST'])
+@login_required_admin
+def api_settings_local_user():
+    """Create or update a local user"""
+    user = session.get('user', {})
+    if user.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Admin only'})
+
+    data = request.get_json() or {}
+    mode = data.get('mode', 'create')
+    username = data.get('username', '').strip().lower()
+    display_name = data.get('display_name', '').strip() or None
+    role = data.get('role', 'operator').strip()
+    manifest_filter = data.get('filter', '').strip() or None
+    notes = data.get('notes', '').strip() or None
+    force_change = data.get('force_change', True)
+
+    if not username:
+        return jsonify({'success': False, 'error': 'Username required'})
+
+    valid_roles = ['admin', 'bel-admin', 'operator', 'report']
+    if role not in valid_roles:
+        return jsonify({'success': False, 'error': f'Invalid role. Must be one of: {", ".join(valid_roles)}'})
+
+    try:
+        from db_utils import local_users as local_users_db
+
+        if mode == 'create':
+            password = data.get('password', '')
+            if len(password) < 6:
+                return jsonify({'success': False, 'error': 'Password must be at least 6 characters'})
+
+            # Check if user already exists
+            existing = local_users_db.get_user(username)
+            if existing:
+                return jsonify({'success': False, 'error': f'User "{username}" already exists'})
+
+            success = local_users_db.create_user(
+                username=username,
+                password=password,
+                role=role,
+                display_name=display_name,
+                manifest_filter=manifest_filter,
+                must_change_password=force_change,
+                created_by=user.get('username', 'admin'),
+                notes=notes
+            )
+        else:
+            # Edit mode - update fields only (not password)
+            success = local_users_db.update_user(
+                username=username,
+                role=role,
+                display_name=display_name,
+                manifest_filter=manifest_filter,
+                notes=notes
+            )
+
+        return jsonify({'success': success, 'error': None if success else 'Operation failed'})
+    except Exception as e:
+        logger.error(f"Failed to save local user: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@settings_bp.route('/api/settings/local-user/reset-password', methods=['POST'])
+@login_required_admin
+def api_settings_local_user_reset_password():
+    """Admin password reset for a local user"""
+    user = session.get('user', {})
+    if user.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Admin only'})
+
+    data = request.get_json() or {}
+    username = data.get('username', '').strip().lower()
+    new_password = data.get('new_password', '')
+
+    if not username:
+        return jsonify({'success': False, 'error': 'Username required'})
+    if len(new_password) < 6:
+        return jsonify({'success': False, 'error': 'Password must be at least 6 characters'})
+
+    try:
+        from db_utils import local_users as local_users_db
+        success = local_users_db.reset_password(username, new_password, force_change=True)
+        return jsonify({'success': success, 'error': None if success else 'Reset failed'})
+    except Exception as e:
+        logger.error(f"Failed to reset password: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@settings_bp.route('/api/settings/local-user/<username>', methods=['DELETE'])
+@login_required_admin
+def api_settings_delete_local_user(username):
+    """Delete a local user"""
+    user = session.get('user', {})
+    if user.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Admin only'})
+
+    username = username.strip().lower()
+    if username == 'admin':
+        return jsonify({'success': False, 'error': 'Cannot delete the default admin user'})
+
+    try:
+        from db_utils import local_users as local_users_db
+        success = local_users_db.delete_user(username)
+        return jsonify({'success': success, 'error': None if success else 'Delete failed'})
+    except Exception as e:
+        logger.error(f"Failed to delete local user: {e}")
+        return jsonify({'success': False, 'error': str(e)})

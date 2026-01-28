@@ -162,6 +162,37 @@ CREATE TABLE user_roles (
 );
 ```
 
+### local_users
+
+Local user accounts for authentication (auto-created on startup).
+
+```sql
+CREATE TABLE local_users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    password_hash VARCHAR(64) NOT NULL,
+    display_name VARCHAR(200) DEFAULT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'operator',
+    manifest_filter VARCHAR(100) DEFAULT NULL,
+    is_active TINYINT(1) DEFAULT 1,
+    must_change_password TINYINT(1) DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    created_by VARCHAR(100) DEFAULT NULL,
+    last_login TIMESTAMP NULL DEFAULT NULL,
+    notes TEXT DEFAULT NULL,
+    INDEX idx_username (username),
+    INDEX idx_active (is_active)
+);
+```
+
+**Columns:**
+- `password_hash` - SHA256 of `username:password:nanohub-salt`
+- `must_change_password` - 1 = user is forced to change password on next login
+- `last_login` - Updated automatically on each successful authentication
+
+Default `admin` user is seeded automatically if not present.
+
 ### required_profiles
 
 Profiles required for each manifest (used by New Device Installation).
