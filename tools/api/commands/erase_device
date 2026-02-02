@@ -1,0 +1,146 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+# NanoHUB Erase Device - podle oficiální NanoMDM dokumentace
+# Usage: ./erase_device.sh <UDID> [PIN]
+# WARNING: This will completely wipe the device!
+
+set -eo pipefail
+
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+    echo "Usage: $0 <UDID> [PIN]"
+    echo "Example: $0 00008020-0001713C1E90003A"
+    echo "Example: $0 00008020-0001713C1E90003A 123456"
+    echo ""
+    echo "WARNING: This will completely erase the device!"
+    echo "All data will be permanently lost!"
+    exit 1
+fi
+
+UDID="$1"
+PIN="${2:-}"
+
+# Interactive confirmation only when running from terminal (not from web backend)
+# Web backend validates confirmation in execute_device_action() before calling this script
+if [ -t 0 ]; then
+    echo ""
+    echo "================================================================"
+    echo "              DEVICE ERASE WARNING"
+    echo "================================================================"
+    echo "Target device UDID: $UDID"
+    echo "This operation will:"
+    echo "  - Completely wipe all data on the device"
+    echo "  - Remove all apps, photos, documents"
+    echo "  - Reset device to factory settings"
+    echo "  - Remove all user accounts and settings"
+    echo ""
+    echo "THIS ACTION CANNOT BE UNDONE!"
+    echo "================================================================"
+    echo ""
+
+    read -p "Are you absolutely sure you want to erase this device? Type 'ERASE' to confirm: " CONFIRMATION
+
+    if [ "$CONFIRMATION" != "ERASE" ]; then
+        echo "[CANCELLED] Device erase cancelled by user"
+        exit 0
+    fi
+
+    echo ""
+    echo "[WARNING] Final confirmation required!"
+    read -p "Type the device UDID to proceed: " UDID_CONFIRM
+
+    if [ "$UDID_CONFIRM" != "$UDID" ]; then
+        echo "[CANCELLED] UDID confirmation failed"
+        exit 0
+    fi
+fi
+
+echo ""
+echo "[INFO] Preparing EraseDevice command for $UDID..."
+
+# Generate command UUID
+CMD_UUID=$(uuidgen)
+
+# Create EraseDevice command (unique temp file for parallel execution)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+cat > "$TEMP_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>EraseDevice</string>
+PLIST_EOF
+
+# Add PIN if provided
+if [ -n "$PIN" ]; then
+    cat >> "$TEMP_PLIST" << PLIST_EOF
+        <key>PIN</key>
+        <string>$PIN</string>
+PLIST_EOF
+fi
+
+# Complete the plist
+cat >> "$TEMP_PLIST" << PLIST_EOF
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
+echo "[INFO] Sending EraseDevice command to $UDID..."
+echo "Command UUID: $CMD_UUID"
+
+# Send command via NanoMDM API
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+# Extract HTTP code and response body
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+# Cleanup temp file
+rm -f "$TEMP_PLIST"
+
+# Check response
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "[OK] EraseDevice command sent successfully!"
+    if [ -n "$BODY" ] && [ "$BODY" != "{}" ]; then
+        echo "Response: $BODY"
+    fi
+    echo ""
+    echo "================================================================"
+    echo "ERASE COMMAND SENT"
+    echo "================================================================"
+    echo "The device will begin erasing within 30 seconds."
+    echo "The process typically takes 5-15 minutes depending on:"
+    echo "  - Device model and storage size"
+    echo "  - Amount of data to erase"
+    echo "  - Network connection speed"
+    echo ""
+    echo "Device status during erase:"
+    echo "  1. Device will show 'Erasing...' screen"
+    echo "  2. Progress bar will indicate completion"
+    echo "  3. Device will restart automatically"
+    echo "  4. Device will show initial setup screen"
+    echo ""
+    echo "Monitor progress with:"
+    echo "  tail -f /var/log/nanohub/webhook.log | grep -E \"(EraseDevice|$UDID)\""
+    echo "================================================================"
+else
+    echo "[ERROR] Failed to send EraseDevice command (HTTP: $HTTP_CODE)"
+    if [ -n "$BODY" ]; then
+        echo "Error response: $BODY"
+    fi
+    exit 1
+fi
+
+echo ""
+echo "[INFO] EraseDevice command queued for execution"
+echo "[INFO] Command UUID: $CMD_UUID"
+echo "[INFO] Monitor device status in webhook logs"
