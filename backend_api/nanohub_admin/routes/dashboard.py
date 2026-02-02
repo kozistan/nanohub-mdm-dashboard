@@ -126,8 +126,18 @@ ADMIN_COMMAND_TEMPLATE = '''
     <link rel="stylesheet" href="/static/css/qbone.css">
     <link rel="stylesheet" href="/static/css/admin.css">
     <link rel="shortcut icon" href="/static/favicon.ico">
+    <style>
+    .params-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0 20px;
+    }
+    .params-grid .form-group.full-width {
+        grid-column: 1 / -1;
+    }
+    </style>
 </head>
-<body class="page-with-table">
+<body class="page-with-table page-command">
     <div id="wrap">
         <div style="display: flex; justify-content: center; align-items: center;">
             <img id="logo" src="{{ current_logo }}" alt="Logo" style="max-height:60px;max-width:200px;"/>
@@ -154,8 +164,11 @@ ADMIN_COMMAND_TEMPLATE = '''
             {% endif %}
 
             <form id="commandForm" onsubmit="return executeCommand(event)" style="text-align:left;">
+                {% if command.parameters|length > 3 %}
+                <div class="params-grid">
+                {% endif %}
                 {% for param in command.parameters %}
-                <div class="form-group">
+                <div class="form-group {% if command.parameters|length > 3 and param.type in ['device', 'devices', 'device_autofill', 'select_multiple', 'profile'] %}full-width{% endif %}">
                     <label>{{ param.label }}{% if param.required %} <span style="color:#e92128;">*</span>{% endif %}</label>
 
                     {% if param.type == 'device' %}
@@ -186,7 +199,7 @@ ADMIN_COMMAND_TEMPLATE = '''
                             <button type="button" onclick="showAllDevices()" class="filter-btn">Show All</button>
                         </div>
                     </div>
-                    <div class="device-table-container" id="device-table-container" style="max-height: 400px !important; flex: none !important;">
+                    <div class="device-table-container" id="device-table-container" style="max-height: 400px; flex: none;">
                         <table class="device-table" id="device-table">
                             <thead>
                                 <tr><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>DEP</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
@@ -226,7 +239,7 @@ ADMIN_COMMAND_TEMPLATE = '''
                             <button type="button" onclick="showAllDevices()" class="filter-btn">Show All</button>
                         </div>
                     </div>
-                    <div class="device-table-container" id="device-table-container" style="max-height: 400px !important; flex: none !important;">
+                    <div class="device-table-container" id="device-table-container" style="max-height: 400px; flex: none;">
                         <table class="device-table" id="device-table">
                             <thead>
                                 <tr><th><input type="checkbox" id="select-all" onchange="toggleSelectAll()"></th><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>DEP</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
@@ -266,7 +279,7 @@ ADMIN_COMMAND_TEMPLATE = '''
                         <button type="button" onclick="searchAutofillDevices()" class="btn" style="margin-left:5px;">Search</button>
                         <button type="button" onclick="showAllAutofillDevices()" class="btn" style="margin-left:5px;">Show All</button>
                     </div>
-                    <div class="device-table-container">
+                    <div class="device-table-container" id="autofill-device-table-container" style="max-height: 400px; flex: none;">
                         <table class="device-table" id="autofill-device-table">
                             <thead>
                                 <tr><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>DEP</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
@@ -296,6 +309,9 @@ ADMIN_COMMAND_TEMPLATE = '''
                     {% endif %}
                 </div>
                 {% endfor %}
+                {% if command.parameters|length > 3 %}
+                </div>
+                {% endif %}
 
                 <div style="margin-top:20px;">
                     <button type="submit" class="btn {% if command.dangerous %}red{% endif %}">
@@ -346,6 +362,9 @@ ADMIN_COMMAND_TEMPLATE = '''
     }
 
     function showAllDevices() {
+        // Clear table immediately and show loading state
+        const tbody = document.getElementById('device-tbody');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="' + (isMultiSelect ? '13' : '12') + '" style="text-align:center;color:#B0B0B0;">Loading...</td></tr>';
         // Remove inline style limit for full-height display
         const container = document.getElementById('device-table-container');
         if (container) {
@@ -371,6 +390,9 @@ ADMIN_COMMAND_TEMPLATE = '''
             showAllDevices();
             return;
         }
+        // Clear table immediately and show loading state
+        const tbody = document.getElementById('device-tbody');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="' + (isMultiSelect ? '13' : '12') + '" style="text-align:center;color:#B0B0B0;">Searching...</td></tr>';
         // Reset to compact display for search results
         const container = document.getElementById('device-table-container');
         if (container) {
@@ -504,8 +526,11 @@ ADMIN_COMMAND_TEMPLATE = '''
     let allAutofillDevices = [];
 
     function showAllAutofillDevices() {
+        // Clear table immediately and show loading state
+        const tbody = document.getElementById('autofill-device-tbody');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#B0B0B0;">Loading...</td></tr>';
         // Remove inline style limit for full-height display
-        const container = document.getElementById('device-table-container');
+        const container = document.getElementById('autofill-device-table-container');
         if (container) {
             container.style.maxHeight = 'calc(100vh - 400px)';
         }
@@ -529,8 +554,11 @@ ADMIN_COMMAND_TEMPLATE = '''
             showAllAutofillDevices();
             return;
         }
+        // Clear table immediately and show loading state
+        const tbody = document.getElementById('autofill-device-tbody');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#B0B0B0;">Searching...</td></tr>';
         // Reset to compact display for search results
-        const container = document.getElementById('device-table-container');
+        const container = document.getElementById('autofill-device-table-container');
         if (container) {
             container.style.maxHeight = '400px';
         }

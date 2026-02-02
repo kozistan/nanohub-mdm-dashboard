@@ -222,6 +222,11 @@ html body.page-with-table .panel {
     margin: 10px auto 20px auto !important;
 }
 
+/* Command pages - scrollable panel so device table doesn't push params off-screen */
+html body.page-with-table.page-command .panel {
+    overflow-y: auto !important;
+}
+
 /* Exception for command pages with output - allow scrolling */
 html body.page-with-table.has-command-output {
     height: auto !important;
