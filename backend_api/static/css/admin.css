@@ -325,6 +325,14 @@ html body.page-with-table #tab-content-ddm #ddm-content > .table-wrapper {
     overflow-x: auto;
 }
 
+/* Applications container - scrollable list of apps from manifest */
+#applications-container {
+    max-height: 400px;
+    overflow-y: auto;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
 .device-table {
     width: 100%;
     font-size: 0.9em;
