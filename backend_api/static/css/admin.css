@@ -227,6 +227,11 @@ html body.page-with-table.page-command .panel {
     overflow-y: auto !important;
 }
 
+/* Settings page - scrollable panel for long user lists */
+html body.page-with-table .panel:has(.settings-tabs) {
+    overflow-y: auto !important;
+}
+
 /* Exception for command pages with output - allow scrolling */
 html body.page-with-table.has-command-output {
     height: auto !important;

@@ -499,7 +499,19 @@ ADMIN_SETTINGS_TEMPLATE = '''
         document.querySelectorAll('.settings-tabs a').forEach(a => a.classList.remove('active'));
         document.getElementById('tab-' + tabId).classList.add('active');
         document.querySelector('.settings-tabs a[data-tab="' + tabId + '"]').classList.add('active');
+        location.hash = tabId;
     }
+
+    // Restore active tab from URL hash on page load
+    (function() {
+        var hash = location.hash.replace('#', '');
+        if (hash && document.getElementById('tab-' + hash)) {
+            document.querySelectorAll('.settings-section').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.settings-tabs a').forEach(a => a.classList.remove('active'));
+            document.getElementById('tab-' + hash).classList.add('active');
+            document.querySelector('.settings-tabs a[data-tab="' + hash + '"]').classList.add('active');
+        }
+    })();
 
     function saveUserRole() {
         const username = document.getElementById('roleUsername').value.trim().toLowerCase();
