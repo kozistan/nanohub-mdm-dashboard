@@ -10,8 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import Blueprint, render_template_string, session, request, jsonify
 
-from config import Config
-from db_utils import db, required_profiles
+from db_utils import required_profiles
 from command_registry import COMMANDS_DIR, PROFILE_DIRS
 
 from .utils import login_required_admin, admin_required

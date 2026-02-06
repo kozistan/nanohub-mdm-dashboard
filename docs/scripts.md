@@ -10,23 +10,25 @@ Command-line tools for automation and maintenance.
 │   ├── api/commands/      # MDM command scripts
 │   ├── inventory_update.py
 │   └── queue_cleanup.py   # MDM queue maintenance
-├── ddm/scripts/           # DDM management
+├── ddm/                   # DDM declarations + set definitions
 └── backend_api/
     ├── manage_roles.py    # User role management
-    ├── nanohub_admin_core.py  # Admin panel routes (main)
+    ├── nanohub_admin_core.py  # Blueprint registration (~43 lines)
     └── nanohub_admin/     # Modular admin package
-        ├── __init__.py    # Package init, register_routes()
+        ├── __init__.py    # register_routes() - all blueprints
         ├── core.py        # Shared functions (device data, audit, VPP)
         ├── commands.py    # Command execution (execute_*)
         ├── profiles.py    # Profile management routes
         ├── utils.py       # Decorators (login_required, admin_required)
         └── routes/        # Route blueprints
-            ├── settings.py
-            ├── reports.py
-            ├── vpp.py
-            ├── devices.py # Device list & detail
-            ├── ddm.py
-            └── help.py
+            ├── dashboard.py  # Commands page, /command/*, /execute
+            ├── history.py    # Command execution history
+            ├── devices.py    # Device list & detail
+            ├── settings.py   # Admin settings page
+            ├── reports.py    # Statistics and reports
+            ├── vpp.py        # VPP/App management
+            ├── ddm.py        # Declarative Device Management
+            └── help.py       # Help documentation
 ```
 
 ## Backend API Architecture
@@ -35,11 +37,17 @@ The admin panel is organized into modular components:
 
 | Module | Lines | Description |
 |--------|-------|-------------|
-| `nanohub_admin_core.py` | ~380 | Main routes (/, /command, /execute, /history) |
-| `nanohub_admin/core.py` | ~1290 | Shared functions (device data, audit, VPP, webhooks) |
+| `nanohub_admin_core.py` | ~43 | Blueprint registration, inject_logo |
+| `nanohub_admin/core.py` | ~1290 | Shared functions (device data, audit, VPP) |
 | `nanohub_admin/commands.py` | ~3040 | All execute_* command handlers |
 | `nanohub_admin/profiles.py` | ~650 | Profile management page and API |
-| `nanohub_admin/routes/devices.py` | ~1700 | Device list and detail pages |
+| `nanohub_admin/routes/dashboard.py` | ~950 | Commands page, command execution |
+| `nanohub_admin/routes/history.py` | ~320 | Command execution history |
+| `nanohub_admin/routes/devices.py` | ~1710 | Device list and detail pages |
+| `nanohub_admin/routes/reports.py` | ~2760 | Statistics and reports |
+| `nanohub_admin/routes/vpp.py` | ~1820 | VPP/App management |
+| `nanohub_admin/routes/ddm.py` | ~1520 | Declarative Device Management |
+| `nanohub_admin/routes/settings.py` | ~1310 | Admin settings |
 
 ### Key Functions by Module
 
@@ -53,6 +61,15 @@ The admin panel is organized into modular components:
 - `execute_bulk_command()` - parallel execution
 - `execute_device_add/update/delete()` - device CRUD
 - `execute_manage_*()` - profiles, DDM, VPP, etc.
+
+**dashboard.py:**
+- `/` - Commands dashboard (category grid)
+- `/command/<cmd_id>` - Command execution page
+- `/execute` - Execute command API
+- `/api/commands` - Get available commands
+
+**history.py:**
+- `/history` - Command execution history with filters
 
 **profiles.py:**
 - `/profiles` page with required profiles management
@@ -199,26 +216,26 @@ Runs daily at 03:00:
 
 ## DDM Scripts
 
-Location: `/opt/nanohub/ddm/scripts/`
+Location: `/usr/local/bin/`
+
+See [DDM documentation](ddm) for detailed usage, declaration types, and troubleshooting.
 
 ```bash
-# Upload all declarations
-./ddm-upload-declarations.sh
+# Upload all declaration JSON files to KMFDDM
+ddm-upload-declarations.sh
 
-# Create sets
-./ddm-create-sets.sh
+# Create sets from TXT definition files
+ddm-create-sets.sh
 
-# Assign device to set
-./ddm-assign-device.sh <UDID> <set-name>
+# Assign/remove set to/from device
+ddm-assign-device.sh assign <UDID> <set-name>
+ddm-assign-device.sh remove <UDID> <set-name>
 
-# Force sync
-./ddm-force-sync.sh <UDID>
+# Bulk assign/remove
+ddm-bulk-assign.sh assign "UDID1,UDID2" <set-name>
 
 # Status check
-./ddm-status.sh all|declarations|sets|device <UDID>
-
-# Bulk assign
-./ddm-bulk-assign.sh <set-name> <UDID1> <UDID2> ...
+ddm-status.sh [declarations|sets|device <UDID>]
 ```
 
 ## User Role Management

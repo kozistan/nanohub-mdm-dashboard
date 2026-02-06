@@ -512,14 +512,26 @@ def update_device_ddm_cache(enrollment_id: str):
 
         # Update cache in device_details
         ddm_json = json.dumps(declarations)
+        
+        # First try UPDATE (most common case)
         cursor.execute("""
-            INSERT INTO device_details (uuid, ddm_data, ddm_updated_at)
-            VALUES (%s, %s, NOW())
-            ON DUPLICATE KEY UPDATE ddm_data = VALUES(ddm_data), ddm_updated_at = NOW()
-        """, (enrollment_id, ddm_json))
+            UPDATE device_details 
+            SET ddm_data = %s, ddm_updated_at = NOW()
+            WHERE uuid = %s
+        """, (ddm_json, enrollment_id))
+        
+        if cursor.rowcount == 0:
+            # Row doesn't exist, try INSERT
+            try:
+                cursor.execute("""
+                    INSERT INTO device_details (uuid, ddm_data, ddm_updated_at)
+                    VALUES (%s, %s, NOW())
+                """, (enrollment_id, ddm_json))
+            except Exception as insert_err:
+                logger.warning(f"[DB] Could not insert DDM cache for {enrollment_id}: {insert_err}")
 
         conn.commit()
-        logger.debug(f"[DB] Updated DDM cache for {enrollment_id}: {len(declarations)} declarations")
+        logger.info(f"[DB] Updated DDM cache for {enrollment_id}: {len(declarations)} declarations")
         return True
 
     except Exception as e:
@@ -761,7 +773,10 @@ def handle_ddm_status_report(enrollment_id: str, udid: str, ddm_data: dict):
     if all_declarations and save_ddm_declaration_status(enrollment_id, all_declarations):
         saved_parts.append(f"{len(all_declarations)} decl")
         # Update device_details cache for reports page
-        if update_device_ddm_cache(enrollment_id):
+        logger.info(f"[DDM] {enrollment_id} | Attempting cache update...")
+        cache_result = update_device_ddm_cache(enrollment_id)
+        logger.info(f"[DDM] {enrollment_id} | Cache update result: {cache_result}")
+        if cache_result:
             saved_parts.append("cache")
     if status_items and save_ddm_status_values(enrollment_id, status_items, status_id):
         saved_parts.append("status")
