@@ -3242,7 +3242,14 @@ def execute_manage_vpp_app(params, user_info):
 
 
 def execute_ddm_force_sync(params, user_info):
-    """Handle DDM Force Sync command (bulk push to multiple devices)"""
+    """Handle DDM Force Sync command (bulk push to multiple devices)
+    
+    True force sync requires:
+    1. Get current sets for device
+    2. Remove all sets
+    3. Re-add all sets (this changes tokens)
+    4. Send push
+    """
     devices = normalize_devices_param(params.get('devices'))
 
     if not devices:
@@ -3262,6 +3269,7 @@ def execute_ddm_force_sync(params, user_info):
         pass
 
     auth_string = base64.b64encode(f"nanohub:{api_key}".encode()).decode()
+    headers = {'Authorization': f'Basic {auth_string}'}
 
     output_lines = []
     output_lines.append("=" * 60)
@@ -3272,27 +3280,67 @@ def execute_ddm_force_sync(params, user_info):
     success_count = 0
     fail_count = 0
 
-    def send_push(udid):
+    def force_sync_device(udid):
         try:
+            # 1. Get current sets for device
+            req = urllib.request.Request(
+                f"{nanohub_url}/api/v1/ddm/enrollment-sets/{udid}",
+                headers=headers
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                current_sets = json.loads(resp.read().decode())
+            
+            if not current_sets:
+                # No sets assigned, just send push
+                req = urllib.request.Request(
+                    f"{nanohub_url}/api/v1/nanomdm/push/{udid}",
+                    method='PUT',
+                    headers=headers
+                )
+                urllib.request.urlopen(req, timeout=30)
+                return {'success': True, 'udid': udid, 'note': 'no sets, push only'}
+            
+            # 2. Remove each set
+            for set_name in current_sets:
+                req = urllib.request.Request(
+                    f"{nanohub_url}/api/v1/ddm/enrollment-sets/{udid}?set={set_name}",
+                    method='DELETE',
+                    headers=headers
+                )
+                urllib.request.urlopen(req, timeout=30)
+            
+            # 3. Re-add each set (this changes tokens)
+            for set_name in current_sets:
+                req = urllib.request.Request(
+                    f"{nanohub_url}/api/v1/ddm/enrollment-sets/{udid}?set={set_name}",
+                    method='PUT',
+                    headers=headers
+                )
+                urllib.request.urlopen(req, timeout=30)
+            
+            # 4. Send push
             req = urllib.request.Request(
                 f"{nanohub_url}/api/v1/nanomdm/push/{udid}",
                 method='PUT',
-                headers={'Authorization': f'Basic {auth_string}'}
+                headers=headers
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return {'success': True, 'udid': udid}
+            urllib.request.urlopen(req, timeout=30)
+            
+            return {'success': True, 'udid': udid, 'sets': len(current_sets)}
+            
         except urllib.error.HTTPError as e:
             return {'success': False, 'udid': udid, 'error': f'HTTP {e.code}'}
         except Exception as e:
             return {'success': False, 'udid': udid, 'error': str(e)}
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(send_push, udid): udid for udid in devices}
+        futures = {executor.submit(force_sync_device, udid): udid for udid in devices}
         for future in as_completed(futures):
             result = future.result()
             if result['success']:
                 success_count += 1
-                output_lines.append(f"[OK] {result['udid']}")
+                note = f" ({result.get('sets', 0)} sets)" if result.get('sets') else f" ({result.get('note', '')})"
+                output_lines.append(f"[OK] {result['udid']}{note}")
             else:
                 fail_count += 1
                 output_lines.append(f"[FAIL] {result['udid']}: {result.get('error', 'Unknown error')}")
@@ -3307,3 +3355,5 @@ def execute_ddm_force_sync(params, user_info):
         'output': '\n'.join(output_lines),
         'summary': {'success': success_count, 'failed': fail_count}
     }
+
+
