@@ -244,69 +244,117 @@ log show --predicate 'eventMessage CONTAINS "passcode"' --last 1h
 | Import failed | Check JSON file format and permissions in `/opt/nanohub/ddm/declarations/` |
 | Remove failed | Check KMFDDM server connectivity and API key |
 
-## DDM Auto-Assignment (2026-02)
+## Declaration Types and Activation Rules
 
-DDM sets are now automatically assigned based on device manifest and OS:
+### Three Declaration Types
 
-### When Auto-Assignment Happens
+| Type Prefix | Name | StandardConfigurations | Example |
+|-------------|------|------------------------|---------|
+| `com.apple.activation.*` | Activation | N/A (defines StandardConfigurations) | `com.apple.activation.simple` |
+| `com.apple.configuration.*` | Configuration | **MUST be listed** to apply | `com.apple.configuration.passcode.settings` |
+| `com.apple.management.*` | Management | **NOT needed** (auto-applies via set) | `com.apple.management.organization-info` |
 
-| Event | Behavior |
-|-------|----------|
-| **New Device Installation** | Phase 5 assigns DDM sets based on manifest+OS from `ddm_required_sets` table |
-| **Device Manager - Manifest Change** | Old sets removed, new sets assigned based on new manifest |
+### How Activation Works
 
-### Configuration
+The **activation declaration** controls which configuration declarations are applied to the device. Its `StandardConfigurations` array lists the identifiers of config declarations that should be active.
 
-Required Sets tab defines the mapping:
+Example activation payload:
+```json
+{
+    "Type": "com.apple.activation.simple",
+    "Identifier": "com.sloto.ddm.activation.macos-karlin",
+    "Payload": {
+        "StandardConfigurations": [
+            "com.sloto.ddm.passcode",
+            "com.sloto.ddm.softwareupdate.macos",
+            "com.sloto.ddm.status-subscriptions"
+        ]
+    }
+}
+```
 
-| Manifest | OS | DDM Set |
-|----------|-----|---------|
-| default | macos | sloto-macos-karlin-default |
-| tech | macos | sloto-macos-karlin-tech |
-| default-bel | macos | sloto-macos-bel-default |
-| ... | ... | ... |
+**Key Rules:**
+- Config declarations (`com.apple.configuration.*`) **MUST** be in `StandardConfigurations` to apply
+- Management declarations (`com.apple.management.*`) **auto-apply** via set assignment - no need to list them
+- Each set should have exactly ONE activation declaration
 
-**Note:** Devices enrolled before this feature was added need manual assignment via "Manage DDM Sets" command.
+### Set Editor Warnings
 
-## Force Sync Button
+When editing a set, the UI shows type hints and warnings:
 
-Located in Device Detail → DDM tab → **Force Sync** button.
+| Badge | Meaning |
+|-------|---------|
+| `(activation)` | This is an activation declaration |
+| `(config)` | This is a configuration declaration |
+| `(mgmt)` | This is a management declaration |
+| **no activation** | No activation selected in set - config declarations won't work |
+| **not in activation** | This config is not in the selected activation's StandardConfigurations |
 
-| Feature | Description |
-|---------|-------------|
-| **Purpose** | Send APNs push notification to device |
-| **Effect** | Device syncs DDM declarations on next wake/unlock |
-| **Use When** | Device seems out of sync, or after editing declaration payloads |
+## Complete Workflow: Adding New Config Declaration
 
-**API:** `POST /admin/api/device/<uuid>/ddm-sync`
+### Step 1: Create Declaration
 
-## Upload Button (Declarations)
+1. Go to **DDM** → **Declarations** tab
+2. Click **Add Declaration** or **Import from Files**
+3. Fill in identifier, type, and payload JSON
+4. Click **Save** (auto-uploads to KMFDDM)
 
-Located in DDM page → Declarations tab → **Upload** button per row.
+### Step 2: Update Activation
 
-| Feature | Description |
-|---------|-------------|
-| **Purpose** | Force-upload declaration to KMFDDM |
-| **Status Badge** | ✓ (green) = uploaded, "pending" (orange) = not uploaded |
-| **Use When** | After editing declaration payload in database |
+1. Find the appropriate activation declaration (e.g., `com.sloto.ddm.activation.macos-karlin`)
+2. Click **View** to open it
+3. Add your new declaration identifier to the `StandardConfigurations` array in Payload
+4. Click **Save**
+5. Click **Upload** to push changes to KMFDDM
 
-**API:** `POST /admin/api/ddm/declarations/<id>/upload`
+### Step 3: Add to Set
 
-## DDM Status Display
+1. Go to **Sets** tab
+2. Click **Edit** on the appropriate set
+3. Check the checkbox next to your new declaration
+4. Verify no warning badge appears (if it does, check Step 2)
+5. Click **Save**
 
-Device Detail → DDM tab shows status subscription data:
+### Step 4: Sync Devices
 
-### Categories
+Option A: Wait for automatic check-in (devices sync periodically)
 
-| Category | Status Items |
-|----------|--------------|
-| **device** | serial-number, udid, model, os-version |
-| **passcode** | is-compliant, is-present |
-| **softwareupdate** | install-state, pending-version, failure-reason |
-| **security** | fde.enabled, certificate.list |
+Option B: Force sync immediately:
+1. Go to device's detail page
+2. Click **DDM** tab
+3. Click **Force Sync** button
 
-**Note:** Some status items return "UnsupportedStatusValue" on macOS (passcode, security.fde).
+### Verification
 
-### Refresh Status Button
+1. Go to **Reports** → check DDM column shows correct count
+2. Go to device detail → **DDM** tab → verify declaration shows Active=✓ Valid=✓
 
-Fetches cached DDM status from `status_values` table. Data is updated automatically when device syncs.
+## Complete Workflow: Adding New Management Declaration
+
+Management declarations are simpler - no StandardConfigurations needed:
+
+### Step 1: Create Declaration
+
+Same as above - create or import the declaration.
+
+### Step 2: Add to Set
+
+1. Go to **Sets** tab
+2. Click **Edit** on the appropriate set
+3. Check the checkbox next to your new declaration
+4. No warning should appear (management types don't need activation)
+5. Click **Save**
+
+### Step 3: Sync Devices
+
+Same as above - wait or force sync.
+
+## Common Mistakes
+
+| Mistake | Result | Fix |
+|---------|--------|-----|
+| Config not in StandardConfigurations | Declaration won't apply | Edit activation, add identifier to StandardConfigurations |
+| Wrong activation in set | Configs won't apply | Ensure correct activation for OS (ios vs macos) |
+| Management in StandardConfigurations | Works but unnecessary | Remove from StandardConfigurations (optional) |
+| Forgot to Upload after editing | KMFDDM has old version | Click Upload button on declaration |
+| Forgot to Save set | Changes lost | Always click Save |
