@@ -358,3 +358,40 @@ Same as above - wait or force sync.
 | Management in StandardConfigurations | Works but unnecessary | Remove from StandardConfigurations (optional) |
 | Forgot to Upload after editing | KMFDDM has old version | Click Upload button on declaration |
 | Forgot to Save set | Changes lost | Always click Save |
+
+## DDM in ProfileList (Profiles Tab)
+
+Apple reports some DDM declarations in the ProfileList response, which appear in the Device Detail → Profiles tab with a purple `DDM` badge.
+
+### Which DDM Declarations Appear in Profiles?
+
+Not all DDM declarations show up in ProfileList. Apple only includes declarations that create a visible "profile" entry:
+
+| Declaration Type | In ProfileList | Reason |
+|------------------|----------------|--------|
+| `passcode` | **Yes** | Creates passcode policy profile |
+| `activation` | No | Internal DDM mechanism |
+| `org-info` | No | Management type (metadata only) |
+| `softwareupdate.settings` | No | System preference, not profile |
+| `softwareupdate.enforcement` | No | System preference, not profile |
+| `status-subscriptions` | No | Internal DDM mechanism |
+
+### Display Format
+
+DDM entries in Profiles tab show:
+- **Name**: `DDM` badge + cleaned name (without "Remote Management" prefix)
+- **Identifier**: Decoded DDM identifier (e.g., `com.sloto.ddm.passcode`)
+- **Tooltip**: Original Apple identifier (hover over identifier to see)
+
+### Where to See All DDM Declarations
+
+To see **all** DDM declarations for a device (not just those in ProfileList):
+1. Go to Device Detail
+2. Click the **DDM** tab
+3. View the full list with Active/Valid status
+
+### Why This Matters
+
+- **Profiles tab**: Shows only DDM declarations that Apple reports as "profiles"
+- **DDM tab**: Shows all DDM declarations and their actual status
+- If a declaration shows in DDM tab but not in Profiles tab, this is normal behavior
