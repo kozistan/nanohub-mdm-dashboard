@@ -175,15 +175,14 @@ COMMANDS = {
         'name': 'DDM Force Sync',
         'category': 'ddm',
         'description': 'Send push to force device DDM sync',
-        'script': 'ddm-force-sync.sh',
-        'script_dir': '/opt/nanohub/ddm/scripts',
+        'script': '_internal_ddm_force_sync',
         'parameters': [
-            {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
+            {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
         ],
         'dangerous': False,
         'min_role': 'operator',
-        'bulk_supported': False,
-        'info_text': 'Send push notification to device to force DDM declarations sync.',
+        'bulk_supported': True,
+        'info_text': 'Send push notification to devices to force DDM declarations sync. Select one or more devices.',
     },
 
     # =========================================================================

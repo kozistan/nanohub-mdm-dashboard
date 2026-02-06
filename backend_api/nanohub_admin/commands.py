@@ -17,6 +17,8 @@ import os
 import re
 import json
 import base64
+import urllib.request
+import urllib.error
 import logging
 import subprocess
 import time
@@ -174,6 +176,10 @@ def execute_command(cmd_id, params, user_info):
     # Manage DDM Sets (assign/remove on one or more devices)
     elif cmd_id == 'manage_ddm_sets':
         return execute_manage_ddm_sets(params, user_info)
+
+    # DDM Force Sync (bulk push to devices)
+    elif cmd_id == 'ddm_force_sync':
+        return execute_ddm_force_sync(params, user_info)
 
     # Install Application (on one or more devices)
     elif cmd_id == 'install_application':
@@ -3232,4 +3238,72 @@ def execute_manage_vpp_app(params, user_info):
     return {
         'success': fail_count == 0,
         'output': '\n'.join(output_lines)
+    }
+
+
+def execute_ddm_force_sync(params, user_info):
+    """Handle DDM Force Sync command (bulk push to multiple devices)"""
+    devices = normalize_devices_param(params.get('devices'))
+
+    if not devices:
+        return {'success': False, 'error': 'Missing required parameter: devices'}
+
+    # Load environment for API access
+    nanohub_url = 'http://localhost:9004'
+    api_key = ''
+    try:
+        with open(Config.ENVIRONMENT_FILE, 'r') as f:
+            for line in f:
+                if line.startswith('export NANOHUB_URL='):
+                    nanohub_url = line.split('=', 1)[1].strip().strip('"\'')
+                elif line.startswith('export NANOHUB_API_KEY='):
+                    api_key = line.split('=', 1)[1].strip().strip('"\'')
+    except Exception:
+        pass
+
+    auth_string = base64.b64encode(f"nanohub:{api_key}".encode()).decode()
+
+    output_lines = []
+    output_lines.append("=" * 60)
+    output_lines.append("DDM FORCE SYNC")
+    output_lines.append(f"Devices: {len(devices)}")
+    output_lines.append("=" * 60)
+
+    success_count = 0
+    fail_count = 0
+
+    def send_push(udid):
+        try:
+            req = urllib.request.Request(
+                f"{nanohub_url}/api/v1/nanomdm/push/{udid}",
+                method='PUT',
+                headers={'Authorization': f'Basic {auth_string}'}
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return {'success': True, 'udid': udid}
+        except urllib.error.HTTPError as e:
+            return {'success': False, 'udid': udid, 'error': f'HTTP {e.code}'}
+        except Exception as e:
+            return {'success': False, 'udid': udid, 'error': str(e)}
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(send_push, udid): udid for udid in devices}
+        for future in as_completed(futures):
+            result = future.result()
+            if result['success']:
+                success_count += 1
+                output_lines.append(f"[OK] {result['udid']}")
+            else:
+                fail_count += 1
+                output_lines.append(f"[FAIL] {result['udid']}: {result.get('error', 'Unknown error')}")
+
+    output_lines.append("")
+    output_lines.append("=" * 60)
+    output_lines.append(f"SUMMARY: {success_count} success, {fail_count} failed")
+    output_lines.append("=" * 60)
+
+    return {
+        'success': fail_count == 0,
+        'output': '\n'.join(output_lines),
+        'summary': {'success': success_count, 'failed': fail_count}
     }
