@@ -1190,9 +1190,19 @@ DEVICE_DETAIL_TEMPLATE = '''
 
             let html = '<div class="table-wrapper"><table class="history-table"><thead><tr><th>#</th><th>Name</th><th>Identifier</th><th>Status</th></tr></thead><tbody>';
             pageData.forEach((p, i) => {
-                const ddmBadge = p.is_ddm ? '<span class="badge-ddm">DDM</span>' : '';
-                const displayId = p.is_ddm && p.ddm_identifier ? p.ddm_identifier : p.identifier;
-                html += `<tr><td>${start + i + 1}</td><td>${ddmBadge}${p.name}</td><td style="font-size:0.85em;color:#6b7280;">${displayId}</td><td>${p.status}</td></tr>`;
+                let nameCell, idCell;
+                if (p.is_ddm) {
+                    // DDM profile: clean up name, show DDM identifier with Apple ID in tooltip
+                    let cleanName = p.name.replace(/^Remote Management\s*/i, '').replace(/\s*Profile$/i, '');
+                    nameCell = '<span class="badge-ddm">DDM</span> ' + cleanName;
+                    idCell = p.ddm_identifier
+                        ? '<span title="Apple: ' + p.identifier + '">' + p.ddm_identifier + '</span>'
+                        : p.identifier;
+                } else {
+                    nameCell = p.name;
+                    idCell = p.identifier;
+                }
+                html += `<tr><td>${start + i + 1}</td><td>${nameCell}</td><td style="font-size:0.85em;color:#6b7280;">${idCell}</td><td>${p.status}</td></tr>`;
             });
             html += '</tbody></table></div>';
             html += renderPagination('profiles', profilesPage, totalPages, profilesData.length);
