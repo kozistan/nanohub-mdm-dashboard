@@ -30,19 +30,19 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 
 ### Modular Architecture
 - **Package Structure**: Admin panel split into separate modules
-- **nanohub_admin_core.py** (~43 lines): Blueprint registration only
-- **nanohub_admin/core.py** (~1290 lines): Shared functions (device data, audit, VPP)
-- **nanohub_admin/commands.py** (~3040 lines): All execute_* command handlers
-- **nanohub_admin/profiles.py** (~650 lines): Profile management page and API
+- **nanohub_admin_core.py**: Blueprint registration only
+- **nanohub_admin/core.py**: Shared functions (device data, audit, VPP)
+- **nanohub_admin/commands.py**: All execute_* command handlers
+- **nanohub_admin/profiles.py**: Profile management page and API
 - **nanohub_admin/routes/**: Modular route blueprints
-  - `dashboard.py` - Commands page, command execution (~950 lines)
-  - `history.py` - Command execution history (~320 lines)
-  - `devices.py` - Device list & detail pages (~1710 lines)
-  - `settings.py` - Settings page and configuration (~1310 lines)
-  - `reports.py` - Reports and statistics (~2760 lines)
-  - `vpp.py` - VPP/App management (~1820 lines)
-  - `ddm.py` - DDM management (~1520 lines)
-  - `help.py` - Help documentation
+ - `dashboard.py` - Commands page, command execution
+ - `history.py` - Command execution history
+ - `devices.py` - Device list & detail pages
+ - `settings.py` - Settings page and configuration
+ - `reports.py` - Reports and statistics
+ - `vpp.py` - VPP/App management
+ - `ddm.py` - DDM management
+ - `help.py` - Help documentation
 - **Manifest Management**: Database-backed manifests with CRUD operations
 - **User Role Management**: Database-stored role overrides with CLI tool
 - **Local User Management**: Create/edit/delete local users via Settings UI
@@ -67,9 +67,9 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Tab Interface**: Info, Hardware, Security, Profiles, Apps, History tabs
 - **Quick Actions**: Lock, Restart, Erase directly from device page
 - **Update Inventory**: Bulk inventory update command with filters
-  - OS filter (macOS/iOS)
-  - Manifest filter (dynamic list)
-  - Last Updated filter (24h, 7 days, never)
+ - OS filter (macOS/iOS)
+ - Manifest filter (dynamic list)
+ - Last Updated filter (24h, 7 days, never)
 - **Daily Cron**: Automatic inventory refresh at 14:00
 
 ### VPP Updates Dashboard
@@ -78,10 +78,10 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Database-Driven**: Reads cached app data from device_details table (no device polling)
 - **Filters**: By OS (macOS/iOS), Manifest, device search
 - **Actions**:
-  - Check Updates: Dry-run to see which apps need updates
-  - Apply Updates: Queue InstallApplication commands for outdated apps
-  - Refresh Apps Data: Request fresh InstalledApplicationList from devices
-  - Manage Apps: Edit managed apps JSON manifest
+ - Check Updates: Dry-run to see which apps need updates
+ - Apply Updates: Queue InstallApplication commands for outdated apps
+ - Refresh Apps Data: Request fresh InstalledApplicationList from devices
+ - Manage Apps: Edit managed apps JSON manifest
 - **Smart Queue**: Replaces pending InstallApplication commands with latest version
 - **Force Install**: Option to reinstall all managed apps regardless of version
 - **Batch Script**: `update_vpp_from_db` for automated cron execution with Telegram reports
@@ -151,18 +151,18 @@ Authentication order: local users first, then LDAP. Google SSO uses a separate f
 ## Architecture
 
 ```
-┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
-│  Web Frontend   │────────▶│  Flask Web       │────────▶│   NanoMDM       │
-│  (HTML/CSS/JS)  │         │  (nanohub_web)   │         │   Backend       │
-└─────────────────┘         └──────────────────┘         └─────────────────┘
-        │                           │
-        │                   ┌───────┴───────┐
-        │                   │               │
-        ▼                   ▼               ▼
-┌─────────────────┐  ┌─────────────┐  ┌─────────────┐
-│  Admin Panel    │  │   LDAP/AD   │  │   MySQL     │
-│  (nanohub_admin)│  │   Auth      │  │   Database  │
-└─────────────────┘  └─────────────┘  └─────────────┘
+┌─────────────────┐ ┌──────────────────┐ ┌─────────────────┐
+│ Web Frontend │────────▶│ Flask Web │────────▶│ NanoMDM │
+│ (HTML/CSS/JS) │ │ (nanohub_web) │ │ Backend │
+└─────────────────┘ └──────────────────┘ └─────────────────┘
+ │ │
+ │ ┌───────┴───────┐
+ │ │ │
+ ▼ ▼ ▼
+┌─────────────────┐ ┌─────────────┐ ┌─────────────┐
+│ Admin Panel │ │ LDAP/AD │ │ MySQL │
+│ (nanohub_admin)│ │ Auth │ │ Database │
+└─────────────────┘ └─────────────┘ └─────────────┘
 ```
 
 ## Prerequisites
@@ -258,199 +258,199 @@ GRANT ALL PRIVILEGES ON nanohub.* TO 'nanohub'@'localhost';
 
 -- Device inventory table
 CREATE TABLE IF NOT EXISTS device_inventory (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    uuid VARCHAR(255) UNIQUE NOT NULL,
-    serial VARCHAR(127),
-    os VARCHAR(10),
-    hostname VARCHAR(127),
-    manifest VARCHAR(127) DEFAULT 'default',
-    account VARCHAR(20) DEFAULT 'disabled',
-    dep VARCHAR(20) DEFAULT '0',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_hostname (hostname),
-    INDEX idx_serial (serial),
-    INDEX idx_manifest (manifest),
-    INDEX idx_os (os)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ uuid VARCHAR(255) UNIQUE NOT NULL,
+ serial VARCHAR(127),
+ os VARCHAR(10),
+ hostname VARCHAR(127),
+ manifest VARCHAR(127) DEFAULT 'default',
+ account VARCHAR(20) DEFAULT 'disabled',
+ dep VARCHAR(20) DEFAULT '0',
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX idx_hostname (hostname),
+ INDEX idx_serial (serial),
+ INDEX idx_manifest (manifest),
+ INDEX idx_os (os)
 );
 
 -- Command history table
 CREATE TABLE IF NOT EXISTS command_history (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    user VARCHAR(100) NOT NULL,
-    command_id VARCHAR(100) NOT NULL,
-    command_name VARCHAR(255) NOT NULL,
-    device_udid VARCHAR(100),
-    device_serial VARCHAR(50),
-    device_hostname VARCHAR(255),
-    params TEXT,
-    result_summary TEXT,
-    success TINYINT(1) NOT NULL DEFAULT 0,
-    execution_time_ms INT,
-    INDEX idx_timestamp (timestamp),
-    INDEX idx_device_udid (device_udid),
-    INDEX idx_device_serial (device_serial),
-    INDEX idx_device_hostname (device_hostname),
-    INDEX idx_user (user),
-    INDEX idx_command_id (command_id)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ user VARCHAR(100) NOT NULL,
+ command_id VARCHAR(100) NOT NULL,
+ command_name VARCHAR(255) NOT NULL,
+ device_udid VARCHAR(100),
+ device_serial VARCHAR(50),
+ device_hostname VARCHAR(255),
+ params TEXT,
+ result_summary TEXT,
+ success TINYINT(1) NOT NULL DEFAULT 0,
+ execution_time_ms INT,
+ INDEX idx_timestamp (timestamp),
+ INDEX idx_device_udid (device_udid),
+ INDEX idx_device_serial (device_serial),
+ INDEX idx_device_hostname (device_hostname),
+ INDEX idx_user (user),
+ INDEX idx_command_id (command_id)
 );
 
 -- Audit log table
 CREATE TABLE IF NOT EXISTS admin_audit_log (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    username VARCHAR(255),
-    action VARCHAR(255),
-    command VARCHAR(255),
-    params TEXT,
-    result TEXT,
-    success BOOLEAN,
-    INDEX idx_timestamp (timestamp),
-    INDEX idx_username (username)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ username VARCHAR(255),
+ action VARCHAR(255),
+ command VARCHAR(255),
+ params TEXT,
+ result TEXT,
+ success BOOLEAN,
+ INDEX idx_timestamp (timestamp),
+ INDEX idx_username (username)
 );
 
 -- Device details cache
 CREATE TABLE IF NOT EXISTS device_details (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    uuid VARCHAR(255) NOT NULL UNIQUE,
-    hardware_data JSON,
-    security_data JSON,
-    profiles_data JSON,
-    apps_data JSON,
-    ddm_data JSON,
-    hardware_updated_at TIMESTAMP NULL,
-    security_updated_at TIMESTAMP NULL,
-    profiles_updated_at TIMESTAMP NULL,
-    apps_updated_at TIMESTAMP NULL,
-    ddm_updated_at TIMESTAMP NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_uuid (uuid)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ uuid VARCHAR(255) NOT NULL UNIQUE,
+ hardware_data JSON,
+ security_data JSON,
+ profiles_data JSON,
+ apps_data JSON,
+ ddm_data JSON,
+ hardware_updated_at TIMESTAMP NULL,
+ security_updated_at TIMESTAMP NULL,
+ profiles_updated_at TIMESTAMP NULL,
+ apps_updated_at TIMESTAMP NULL,
+ ddm_updated_at TIMESTAMP NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX idx_uuid (uuid)
 );
 
 -- Manifests table
 CREATE TABLE IF NOT EXISTS manifests (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255) NOT NULL UNIQUE,
-    description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    created_by VARCHAR(255),
-    INDEX idx_name (name)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ name VARCHAR(255) NOT NULL UNIQUE,
+ description TEXT,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ created_by VARCHAR(255),
+ INDEX idx_name (name)
 );
 
 -- Local users table (auto-created on startup, default admin user auto-seeded)
 CREATE TABLE IF NOT EXISTS local_users (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    username VARCHAR(100) NOT NULL UNIQUE,
-    password_hash VARCHAR(64) NOT NULL,
-    display_name VARCHAR(200) DEFAULT NULL,
-    role VARCHAR(50) NOT NULL DEFAULT 'operator',
-    manifest_filter VARCHAR(100) DEFAULT NULL,
-    is_active TINYINT(1) DEFAULT 1,
-    must_change_password TINYINT(1) DEFAULT 1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    created_by VARCHAR(100) DEFAULT NULL,
-    last_login TIMESTAMP NULL DEFAULT NULL,
-    notes TEXT DEFAULT NULL,
-    INDEX idx_username (username),
-    INDEX idx_active (is_active)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ username VARCHAR(100) NOT NULL UNIQUE,
+ password_hash VARCHAR(64) NOT NULL,
+ display_name VARCHAR(200) DEFAULT NULL,
+ role VARCHAR(50) NOT NULL DEFAULT 'operator',
+ manifest_filter VARCHAR(100) DEFAULT NULL,
+ is_active TINYINT(1) DEFAULT 1,
+ must_change_password TINYINT(1) DEFAULT 1,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ created_by VARCHAR(100) DEFAULT NULL,
+ last_login TIMESTAMP NULL DEFAULT NULL,
+ notes TEXT DEFAULT NULL,
+ INDEX idx_username (username),
+ INDEX idx_active (is_active)
 );
 
 -- User roles table
 CREATE TABLE IF NOT EXISTS user_roles (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    username VARCHAR(100) NOT NULL UNIQUE,
-    role VARCHAR(50) NOT NULL DEFAULT 'report',
-    manifest_filter VARCHAR(100) DEFAULT NULL,
-    is_active TINYINT(1) DEFAULT 1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    created_by VARCHAR(100) DEFAULT NULL,
-    notes TEXT DEFAULT NULL,
-    INDEX idx_username (username),
-    INDEX idx_role (role)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ username VARCHAR(100) NOT NULL UNIQUE,
+ role VARCHAR(50) NOT NULL DEFAULT 'report',
+ manifest_filter VARCHAR(100) DEFAULT NULL,
+ is_active TINYINT(1) DEFAULT 1,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ created_by VARCHAR(100) DEFAULT NULL,
+ notes TEXT DEFAULT NULL,
+ INDEX idx_username (username),
+ INDEX idx_role (role)
 );
 
 -- Required profiles table
 CREATE TABLE IF NOT EXISTS required_profiles (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    manifest VARCHAR(127) NOT NULL,
-    os VARCHAR(10) NOT NULL,
-    profile_identifier VARCHAR(255) NOT NULL,
-    profile_filename VARCHAR(255) DEFAULT NULL,
-    install_order INT DEFAULT 100,
-    is_optional TINYINT(1) DEFAULT 0,
-    variant_group VARCHAR(50) DEFAULT NULL,
-    variant_value VARCHAR(50) DEFAULT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_manifest_os_profile (manifest, os, profile_identifier),
-    INDEX idx_manifest (manifest),
-    INDEX idx_os (os)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ manifest VARCHAR(127) NOT NULL,
+ os VARCHAR(10) NOT NULL,
+ profile_identifier VARCHAR(255) NOT NULL,
+ profile_filename VARCHAR(255) DEFAULT NULL,
+ install_order INT DEFAULT 100,
+ is_optional TINYINT(1) DEFAULT 0,
+ variant_group VARCHAR(50) DEFAULT NULL,
+ variant_value VARCHAR(50) DEFAULT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY unique_manifest_os_profile (manifest, os, profile_identifier),
+ INDEX idx_manifest (manifest),
+ INDEX idx_os (os)
 );
 
 -- Required applications table
 CREATE TABLE IF NOT EXISTS required_applications (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    manifest VARCHAR(127) NOT NULL,
-    os VARCHAR(10) NOT NULL,
-    app_name VARCHAR(255) NOT NULL,
-    manifest_url VARCHAR(500) NOT NULL,
-    install_order INT DEFAULT 100,
-    is_optional TINYINT(1) DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_manifest (manifest),
-    INDEX idx_os (os)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ manifest VARCHAR(127) NOT NULL,
+ os VARCHAR(10) NOT NULL,
+ app_name VARCHAR(255) NOT NULL,
+ manifest_url VARCHAR(500) NOT NULL,
+ install_order INT DEFAULT 100,
+ is_optional TINYINT(1) DEFAULT 0,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ INDEX idx_manifest (manifest),
+ INDEX idx_os (os)
 );
 
 -- DDM Declarations table
 CREATE TABLE IF NOT EXISTS declarations (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    identifier VARCHAR(255) NOT NULL UNIQUE,
-    type VARCHAR(255) NOT NULL,
-    payload JSON,
-    server_token VARCHAR(255) DEFAULT NULL,
-    uploaded_at TIMESTAMP NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_identifier (identifier),
-    INDEX idx_type (type)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ identifier VARCHAR(255) NOT NULL UNIQUE,
+ type VARCHAR(255) NOT NULL,
+ payload JSON,
+ server_token VARCHAR(255) DEFAULT NULL,
+ uploaded_at TIMESTAMP NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX idx_identifier (identifier),
+ INDEX idx_type (type)
 );
 
 -- DDM Sets table
 CREATE TABLE IF NOT EXISTS declaration_sets (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    set_name VARCHAR(255) NOT NULL UNIQUE,
-    description TEXT,
-    server_token VARCHAR(255) DEFAULT NULL,
-    uploaded_at TIMESTAMP NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_set_name (set_name)
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ set_name VARCHAR(255) NOT NULL UNIQUE,
+ description TEXT,
+ server_token VARCHAR(255) DEFAULT NULL,
+ uploaded_at TIMESTAMP NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX idx_set_name (set_name)
 );
 
 -- DDM Set-Declaration mappings
 CREATE TABLE IF NOT EXISTS set_declarations (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    set_id INT NOT NULL,
-    declaration_id INT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_set_declaration (set_id, declaration_id),
-    FOREIGN KEY (set_id) REFERENCES declaration_sets(id) ON DELETE CASCADE,
-    FOREIGN KEY (declaration_id) REFERENCES declarations(id) ON DELETE CASCADE
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ set_id INT NOT NULL,
+ declaration_id INT NOT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY unique_set_declaration (set_id, declaration_id),
+ FOREIGN KEY (set_id) REFERENCES declaration_sets(id) ON DELETE CASCADE,
+ FOREIGN KEY (declaration_id) REFERENCES declarations(id) ON DELETE CASCADE
 );
 
 -- DDM Required Sets - manifest assignments
 CREATE TABLE IF NOT EXISTS ddm_required_sets (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    manifest VARCHAR(127) NOT NULL,
-    os VARCHAR(10) NOT NULL,
-    set_id INT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_manifest_os (manifest, os),
-    INDEX idx_manifest (manifest),
-    FOREIGN KEY (set_id) REFERENCES declaration_sets(id) ON DELETE CASCADE
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ manifest VARCHAR(127) NOT NULL,
+ os VARCHAR(10) NOT NULL,
+ set_id INT NOT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY unique_manifest_os (manifest, os),
+ INDEX idx_manifest (manifest),
+ FOREIGN KEY (set_id) REFERENCES declaration_sets(id) ON DELETE CASCADE
 );
 ```
 
@@ -458,33 +458,33 @@ CREATE TABLE IF NOT EXISTS ddm_required_sets (
 
 ```nginx
 server {
-    listen 8000 ssl;
-    server_name mdm.example.com;
+ listen 8000 ssl;
+ server_name mdm.example.com;
 
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
+ ssl_certificate /path/to/cert.pem;
+ ssl_certificate_key /path/to/key.pem;
 
-    # Flask Web Frontend (with LDAP auth)
-    location / {
-        proxy_pass http://127.0.0.1:9007;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+ # Flask Web Frontend (with LDAP auth)
+ location / {
+ proxy_pass http://127.0.0.1:9007;
+ proxy_set_header Host $host;
+ proxy_set_header X-Real-IP $remote_addr;
+ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+ proxy_set_header X-Forwarded-Proto $scheme;
+ }
 
-    # Static files
-    location /static/ {
-        alias /var/www/mdm-web/static/;
-        expires 1d;
-    }
+ # Static files
+ location /static/ {
+ alias /var/www/mdm-web/static/;
+ expires 1d;
+ }
 
-    # API endpoints (for legacy compatibility)
-    location /api/ {
-        proxy_pass http://127.0.0.1:9006/api/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
+ # API endpoints (for legacy compatibility)
+ location /api/ {
+ proxy_pass http://127.0.0.1:9006/api/;
+ proxy_set_header Host $host;
+ proxy_set_header X-Real-IP $remote_addr;
+ }
 }
 ```
 
@@ -508,16 +508,16 @@ Configure AD groups in `nanohub_ldap_auth.py`:
 
 ```python
 GROUP_ROLE_MAPPING = {
-    'it': 'admin',
-    'mdm-admin': 'admin',
-    'mdm-restricted-admin': 'restricted-admin',
-    'mdm-operator': 'operator',
-    'mdm-report': 'report',
+ 'it': 'admin',
+ 'mdm-admin': 'admin',
+ 'mdm-restricted-admin': 'restricted-admin',
+ 'mdm-operator': 'operator',
+ 'mdm-report': 'report',
 }
 
 # Manifest filters for restricted roles
 ROLE_MANIFEST_FILTER = {
-    'restricted-admin': 'site-%',  # Only sees devices with site-* manifests
+ 'restricted-admin': 'site-%', # Only sees devices with site-* manifests
 }
 ```
 
@@ -579,8 +579,8 @@ To add a new restricted admin role:
 1. Select manifest (device group)
 2. Select device
 3. Configure wildcard profiles:
-   - Account: Disabled (default), Enabled, or Skip
-   - Restrictions: Standard, iCloudSync, LevelC, or Skip (macOS)
+ - Account: Disabled (default), Enabled, or Skip
+ - Restrictions: Standard, iCloudSync, LevelC, or Skip (macOS)
 4. Select applications (checkboxes, loaded from DB)
 5. Configure optional settings (WiFi, FileVault, Directory Services, WireGuard)
 6. Execute - installs all required profiles and selected applications
@@ -669,8 +669,8 @@ MDM configuration profiles are **not included** in this repository. You must cre
 ### Profile Locations
 
 ```
-/opt/nanohub/profiles/                    # Standard profiles
-/opt/nanohub/profiles/wireguard_configs/  # WireGuard VPN profiles
+/opt/nanohub/profiles/ # Standard profiles
+/opt/nanohub/profiles/wireguard_configs/ # WireGuard VPN profiles
 ```
 
 ### Profile Requirements
@@ -682,8 +682,8 @@ MDM configuration profiles are **not included** in this repository. You must cre
 ### Profile Naming Convention
 
 ```
-company.macos.ProfileName.profile.signed.mobileconfig   # macOS profiles
-company.ios.ProfileName.profile.signed.mobileconfig     # iOS profiles
+company.macos.ProfileName.profile.signed.mobileconfig # macOS profiles
+company.ios.ProfileName.profile.signed.mobileconfig # iOS profiles
 ```
 
 ### Signing Profiles
@@ -702,17 +702,17 @@ DDM is Apple's newer device management approach that runs parallel to traditiona
 ### DDM Architecture
 
 ```
-┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
-│   Admin Panel   │────────▶│    NanoMDM       │────────▶│   KMFDDM        │
-│   (DDM page)    │         │    API           │         │   (DDM Engine)  │
-└─────────────────┘         └──────────────────┘         └─────────────────┘
-                                    │                            │
-                                    │                    ┌───────┴───────┐
-                                    ▼                    ▼               ▼
-                            ┌─────────────┐      ┌─────────────┐  ┌─────────────┐
-                            │   MySQL     │      │ Declarations│  │    Sets     │
-                            │   (status)  │      │   (JSON)    │  │  (groups)   │
-                            └─────────────┘      └─────────────┘  └─────────────┘
+┌─────────────────┐ ┌──────────────────┐ ┌─────────────────┐
+│ Admin Panel │────────▶│ NanoMDM │────────▶│ KMFDDM │
+│ (DDM page) │ │ API │ │ (DDM Engine) │
+└─────────────────┘ └──────────────────┘ └─────────────────┘
+ │ │
+ │ ┌───────┴───────┐
+ ▼ ▼ ▼
+ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+ │ MySQL │ │ Declarations│ │ Sets │
+ │ (status) │ │ (JSON) │ │ (groups) │
+ └─────────────┘ └─────────────┘ └─────────────┘
 ```
 
 ### DDM Hierarchy
@@ -766,13 +766,13 @@ DDM compliance column in device reports:
 
 ```json
 {
-    "Type": "com.apple.configuration.passcode.settings",
-    "Identifier": "com.company.ddm.passcode",
-    "Payload": {
-        "MinimumLength": 6,
-        "RequireAlphanumeric": false,
-        "MaxFailedAttempts": 10
-    }
+ "Type": "com.apple.configuration.passcode.settings",
+ "Identifier": "com.company.ddm.passcode",
+ "Payload": {
+ "MinimumLength": 6,
+ "RequireAlphanumeric": false,
+ "MaxFailedAttempts": 10
+ }
 }
 ```
 
@@ -832,10 +832,10 @@ Some DDM declarations appear in Device Detail → Profiles tab with `DDM` badge:
 
 ```
 /opt/nanohub/ddm/
-├── declarations/           # DDM declaration JSON files (PRIMARY SOURCE)
-│   └── com.company.ddm.passcode.json
-└── scripts/                # DDM management scripts (optional CLI)
-    └── ddm-status.sh
+├── declarations/ # DDM declaration JSON files (PRIMARY SOURCE)
+│ └── com.company.ddm.passcode.json
+└── scripts/ # DDM management scripts (optional CLI)
+ └── ddm-status.sh
 ```
 
 **Note:** Sets are defined in the database only (not as files). Declarations on disk are the primary source.
@@ -881,9 +881,9 @@ Edit `/etc/systemd/system/nanohub.service` and add the `-webhook-hmac-key` flag:
 
 ```bash
 ExecStart=/usr/bin/docker run --rm --name nanohub \
-    ... \
-    -webhook-url http://localhost:5001/webhook \
-    -webhook-hmac-key ${NANOHUB_WEBHOOK_SECRET}
+ ... \
+ -webhook-url http://localhost:5001/webhook \
+ -webhook-hmac-key ${NANOHUB_WEBHOOK_SECRET}
 ```
 
 Add environment variable:
@@ -924,8 +924,8 @@ grep SECURITY /var/log/nanohub/webhook.log
 
 # Test with invalid signature (should return 401)
 curl -X POST http://localhost:5001/webhook \
-  -H "X-Hmac-Signature: invalid" \
-  -d '{"test": true}'
+ -H "X-Hmac-Signature: invalid" \
+ -d '{"test": true}'
 ```
 
 ## Files Structure
@@ -933,55 +933,55 @@ curl -X POST http://localhost:5001/webhook \
 ```
 /opt/nanohub/
 ├── backend_api/
-│   ├── nanohub_web.py          # Main Flask web frontend
-│   ├── nanohub_ldap_auth.py    # LDAP authentication module
-│   ├── nanohub_admin_core.py   # Blueprint registration only (~43 lines)
-│   ├── command_registry.py     # MDM command definitions
-│   ├── config.py               # Centralized configuration
-│   ├── db_utils.py             # Database utilities
-│   ├── command_executor.py     # Command execution
-│   ├── webhook_poller.py       # Webhook polling
-│   ├── mdm-flask-api_wrappper.py # Legacy API wrapper
-│   ├── manage_roles.py         # CLI tool for user role management
-│   ├── nanohub_admin/          # Admin panel package
-│   │   ├── __init__.py         # Package init, register_routes()
-│   │   ├── core.py             # Shared functions (~1290 lines)
-│   │   ├── commands.py         # Command execution (~3040 lines)
-│   │   ├── profiles.py         # Profile management (~650 lines)
-│   │   ├── utils.py            # Decorators and utilities
-│   │   └── routes/             # Route modules
-│   │       ├── dashboard.py    # Commands page, execution (~950 lines)
-│   │       ├── history.py      # Command history (~320 lines)
-│   │       ├── devices.py      # Device list & detail (~1710 lines)
-│   │       ├── settings.py     # Admin settings (~1310 lines)
-│   │       ├── reports.py      # Statistics and reports (~2760 lines)
-│   │       ├── vpp.py          # VPP management (~1820 lines)
-│   │       ├── ddm.py          # DDM management (~1520 lines)
-│   │       └── help.py         # Help documentation
-│   └── nanohub_environment     # Environment configuration
-├── webhook/                    # Webhook server
-│   └── webhook.py              # Flask webhook with DB writes
-├── ddm/                        # Declarative Device Management
-│   ├── declarations/           # DDM declaration JSON files (PRIMARY SOURCE)
-│   └── scripts/                # DDM management scripts
-├── profiles/                   # MDM configuration profiles (not in repo)
-│   └── wireguard_configs/      # WireGuard VPN profiles (not in repo)
+│ ├── nanohub_web.py # Main Flask web frontend
+│ ├── nanohub_ldap_auth.py # LDAP authentication module
+│ ├── nanohub_admin_core.py # Blueprint registration only
+│ ├── command_registry.py # MDM command definitions
+│ ├── config.py # Centralized configuration
+│ ├── db_utils.py # Database utilities
+│ ├── command_executor.py # Command execution
+│ ├── webhook_poller.py # Webhook polling
+│ ├── mdm-flask-api_wrappper.py # Legacy API wrapper
+│ ├── manage_roles.py # CLI tool for user role management
+│ ├── nanohub_admin/ # Admin panel package
+│ │ ├── __init__.py # Package init, register_routes()
+│ │ ├── core.py # Shared functions
+│ │ ├── commands.py # Command execution
+│ │ ├── profiles.py # Profile management
+│ │ ├── utils.py # Decorators and utilities
+│ │ └── routes/ # Route modules
+│ │ ├── dashboard.py # Commands page, execution
+│ │ ├── history.py # Command history
+│ │ ├── devices.py # Device list & detail
+│ │ ├── settings.py # Admin settings
+│ │ ├── reports.py # Statistics and reports
+│ │ ├── vpp.py # VPP management
+│ │ ├── ddm.py # DDM management
+│ │ └── help.py # Help documentation
+│ └── nanohub_environment # Environment configuration
+├── webhook/ # Webhook server
+│ └── webhook.py # Flask webhook with DB writes
+├── ddm/ # Declarative Device Management
+│ ├── declarations/ # DDM declaration JSON files (PRIMARY SOURCE)
+│ └── scripts/ # DDM management scripts
+├── profiles/ # MDM configuration profiles (not in repo)
+│ └── wireguard_configs/ # WireGuard VPN profiles (not in repo)
 ├── tools/
-│   ├── api/commands/           # MDM command scripts
-│   ├── inventory_update.py     # Daily inventory cron script
-│   └── queue_cleanup.py        # Queue maintenance script
-├── environment.sh              # Environment variables (API keys, URLs)
-└── venv/                       # Python virtual environment
+│ ├── api/commands/ # MDM command scripts
+│ ├── inventory_update.py # Daily inventory cron script
+│ └── queue_cleanup.py # Queue maintenance script
+├── environment.sh # Environment variables (API keys, URLs)
+└── venv/ # Python virtual environment
 
 /var/www/mdm-web/
-├── index.html                  # Main dashboard
+├── index.html # Main dashboard
 └── static/
-    └── dashboard.css           # Stylesheet
+ └── dashboard.css # Stylesheet
 
 /etc/systemd/system/
-├── nanohub-web.service         # Web frontend service
-├── nanohub-webhook.service     # Webhook server
-└── mdm-flask-api.service       # Legacy API service
+├── nanohub-web.service # Web frontend service
+├── nanohub-webhook.service # Webhook server
+└── mdm-flask-api.service # Legacy API service
 ```
 
 ## License
