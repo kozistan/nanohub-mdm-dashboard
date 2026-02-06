@@ -13,7 +13,7 @@ Web-based management dashboard for Apple MDM (Mobile Device Management) using Na
 - **Real-time Device Status**: Online/Active/Offline status indicators
 - **Device Search**: Search by UUID, serial number, or hostname
 - **Parallel Execution**: 10-20x faster bulk operations with race condition fixes
-- **DDM Support**: Declarative Device Management with KMFDDM integration
+- **DDM Support**: Declarative Device Management with KMFDDM integration, auto-assignment based on manifest+OS, Force Sync button, status subscriptions
 
 ### Admin Panel
 - **Device Setup**: DB-driven installation workflows for new devices
@@ -784,6 +784,49 @@ DDM compliance column in device reports:
 4. Devices with matching manifest receive declarations automatically
 
 **Note:** No manual upload needed - declarations are automatically synced to KMFDDM when added or imported.
+
+### DDM Auto-Assignment
+
+DDM sets are automatically assigned based on device manifest and OS:
+
+| Event | Behavior |
+|-------|----------|
+| **New Device Installation** | Phase 5 assigns DDM sets based on manifest+OS from `ddm_required_sets` |
+| **Device Manager - Manifest Change** | Old sets removed, new sets assigned based on new manifest |
+
+### Declaration Types and Activation Rules
+
+| Type Prefix | Name | StandardConfigurations | Example |
+|-------------|------|------------------------|---------|
+| `com.apple.activation.*` | Activation | N/A (defines StandardConfigurations) | `com.apple.activation.simple` |
+| `com.apple.configuration.*` | Configuration | **MUST be listed** to apply | `com.apple.configuration.passcode.settings` |
+| `com.apple.management.*` | Management | **NOT needed** (auto-applies) | `com.apple.management.organization-info` |
+
+**Key Rules:**
+- Config declarations MUST be in activation's `StandardConfigurations` array to apply
+- Management declarations auto-apply via set assignment
+- Each set should have exactly ONE activation declaration
+
+### Set Editor Warnings
+
+When editing a set, the UI shows type hints and warnings:
+- `(activation)`, `(config)`, `(mgmt)` - declaration type hints
+- `no activation` - no activation selected, configs won't work
+- `not in activation` - config not in StandardConfigurations, won't apply
+
+### DDM in ProfileList
+
+Some DDM declarations appear in Device Detail → Profiles tab with `DDM` badge:
+- Only `passcode` and similar configs appear in ProfileList
+- Other DDM declarations (activation, org-info, etc.) only visible in DDM tab
+- This is Apple's intended behavior, not a bug
+
+### Force Sync & Upload Buttons
+
+| Button | Location | Purpose |
+|--------|----------|---------|
+| **Force Sync** | Device Detail → DDM tab | Send APNs push to trigger device DDM sync |
+| **Upload** | DDM → Declarations tab | Force-upload declaration to KMFDDM server |
 
 ### DDM Directory Structure
 
