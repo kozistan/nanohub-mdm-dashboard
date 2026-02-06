@@ -501,6 +501,13 @@ def execute_device_update(params, user_info):
     if not set_parts:
         return {'success': False, 'error': 'No fields to update provided'}
 
+    # Fetch old manifest+os before UPDATE (for DDM set reassignment)
+    old_device = None
+    if 'manifest' in updated_fields:
+        old_device = db.query_one(
+            "SELECT manifest, os FROM device_inventory WHERE uuid = %s", (uuid_val,)
+        )
+
     # Add uuid to params for WHERE clause
     values.append(uuid_val)
 
@@ -508,6 +515,50 @@ def execute_device_update(params, user_info):
 
     try:
         db.execute(sql, tuple(values))
+
+        # If manifest changed, reassign DDM sets
+        ddm_output_lines = []
+        if old_device and 'manifest' in updated_fields:
+            new_manifest = params['manifest'].strip()
+            old_manifest = old_device['manifest']
+            device_os = params.get('os', '').strip() if params.get('os') else old_device['os']
+
+            if old_manifest != new_manifest:
+                def run_ddm_script(script_path, *args):
+                    """Execute a DDM script directly"""
+                    if not os.path.exists(script_path):
+                        return False, f"Script not found: {script_path}"
+                    full_args = [script_path] + list(args)
+                    try:
+                        env = os.environ.copy()
+                        env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+                        result = subprocess.run(full_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                text=True, timeout=60, env=env)
+                        if result.returncode == 0:
+                            return True, result.stdout.strip() if result.stdout else 'OK'
+                        else:
+                            return False, result.stderr.strip() if result.stderr else 'Command failed'
+                    except subprocess.TimeoutExpired:
+                        return False, 'Command timed out'
+                    except Exception as e:
+                        return False, str(e)
+
+                # Remove old DDM sets
+                old_results = _remove_ddm_sets_for_device(uuid_val, old_manifest, device_os, run_ddm_script)
+                for set_name, success, msg in old_results:
+                    if success:
+                        ddm_output_lines.append(f"  DDM set '{set_name}' removed (old manifest: {old_manifest})")
+                    else:
+                        ddm_output_lines.append(f"  DDM set '{set_name}' remove failed: {msg}")
+
+                # Assign new DDM sets
+                new_results = _assign_ddm_sets_for_device(uuid_val, new_manifest, device_os, run_ddm_script)
+                for set_name, success, msg in new_results:
+                    if success:
+                        ddm_output_lines.append(f"  DDM set '{set_name}' assigned (new manifest: {new_manifest})")
+                    else:
+                        ddm_output_lines.append(f"  DDM set '{set_name}' assign failed: {msg}")
+
         audit_log(
             user=user_info.get('username'),
             action='device_update',
@@ -516,9 +567,14 @@ def execute_device_update(params, user_info):
             result=f'Device {uuid_val} updated successfully',
             success=True
         )
+
+        output = f'Device updated successfully:\n  UUID: {uuid_val}\n  Updated fields: {", ".join(updated_fields)}'
+        if ddm_output_lines:
+            output += '\n\nDDM Set Changes:\n' + '\n'.join(ddm_output_lines)
+
         return {
             'success': True,
-            'output': f'Device updated successfully:\n  UUID: {uuid_val}\n  Updated fields: {", ".join(updated_fields)}'
+            'output': output
         }
 
     except Exception as e:
@@ -732,6 +788,66 @@ def execute_manage_applications(params, user_info):
 
     else:
         return {'success': False, 'error': f'Unknown action: {action}'}
+
+
+def _assign_ddm_sets_for_device(uuid, manifest, os_type, run_command_fn):
+    """Assign DDM sets based on manifest+OS from ddm_required_sets table.
+
+    Args:
+        uuid: Device UUID
+        manifest: Device manifest name
+        os_type: Device OS ('macos' or 'ios')
+        run_command_fn: Callable(script_path, action, uuid, set_name) -> (success, output)
+
+    Returns:
+        List of (set_name, success, message) tuples.
+    """
+    results = []
+    sets = db.query_all(
+        """SELECT s.name FROM ddm_required_sets r
+           JOIN ddm_sets s ON r.set_id = s.id
+           WHERE r.manifest = %s AND r.os = %s""",
+        (manifest, os_type)
+    )
+    if not sets:
+        return results
+
+    script = os.path.join(Config.DDM_SCRIPTS_DIR, 'ddm-assign-device.sh')
+    for row in sets:
+        set_name = row['name']
+        success, output = run_command_fn(script, 'assign', uuid, set_name)
+        results.append((set_name, success, output))
+    return results
+
+
+def _remove_ddm_sets_for_device(uuid, manifest, os_type, run_command_fn):
+    """Remove DDM sets for a device based on manifest+OS from ddm_required_sets table.
+
+    Args:
+        uuid: Device UUID
+        manifest: Device manifest name
+        os_type: Device OS ('macos' or 'ios')
+        run_command_fn: Callable(script_path, action, uuid, set_name) -> (success, output)
+
+    Returns:
+        List of (set_name, success, message) tuples.
+    """
+    results = []
+    sets = db.query_all(
+        """SELECT s.name FROM ddm_required_sets r
+           JOIN ddm_sets s ON r.set_id = s.id
+           WHERE r.manifest = %s AND r.os = %s""",
+        (manifest, os_type)
+    )
+    if not sets:
+        return results
+
+    script = os.path.join(Config.DDM_SCRIPTS_DIR, 'ddm-assign-device.sh')
+    for row in sets:
+        set_name = row['name']
+        success, output = run_command_fn(script, 'remove', uuid, set_name)
+        results.append((set_name, success, output))
+    return results
 
 
 def execute_bulk_new_device_installation(params, user_info):
@@ -992,6 +1108,42 @@ def execute_bulk_new_device_installation(params, user_info):
         else:
             output_lines.append(f"  [WARNING] No profile found for: {wireguard_username}")
             output_lines.append(f"  Searched: {wg_base_path}/*/{platform}/*{wireguard_username}*")
+
+    # =================================================================
+    # PHASE 5: DDM Set Assignment (automatic based on manifest+OS)
+    # =================================================================
+    output_lines.append("\n[PHASE 5] DDM Sets...")
+
+    def run_ddm_script(script_path, *args):
+        """Execute a DDM script directly (full path)"""
+        if not os.path.exists(script_path):
+            return False, f"Script not found: {script_path}"
+        full_args = [script_path] + list(args)
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
+            result = subprocess.run(full_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, timeout=60, env=env)
+            if result.returncode == 0:
+                return True, result.stdout.strip() if result.stdout else 'OK'
+            else:
+                return False, result.stderr.strip() if result.stderr else 'Command failed'
+        except subprocess.TimeoutExpired:
+            return False, 'Command timed out'
+        except Exception as e:
+            return False, str(e)
+
+    ddm_results = _assign_ddm_sets_for_device(udid, manifest, platform, run_ddm_script)
+    if ddm_results:
+        for set_name, success, msg in ddm_results:
+            if success:
+                output_lines.append(f"  [OK] DDM set '{set_name}' assigned")
+                commands_executed += 1
+            else:
+                output_lines.append(f"  [ERROR] DDM set '{set_name}' failed: {msg}")
+                errors.append(f"DDM set {set_name}: {msg}")
+    else:
+        output_lines.append("  No DDM sets configured for this manifest+OS")
 
     # =================================================================
     # SUMMARY
@@ -2961,6 +3113,48 @@ def execute_manage_vpp_app(params, user_info):
     if not adam_id:
         return {'success': False, 'error': 'Missing required parameter: adam_id'}
 
+    # Look up bundleId from app registry JSON
+    bundle_id = ''
+    app_json_file = f'/opt/nanohub/data/apps_{platform}.json'
+    try:
+        with open(app_json_file, 'r') as f:
+            app_data = json.load(f)
+        for app in app_data.get('apps', []):
+            if str(app.get('adamId')) == str(adam_id):
+                bundle_id = app.get('bundleId', '')
+                break
+    except Exception as e:
+        logger.warning(f"Could not load app registry {app_json_file}: {e}")
+
+    if not bundle_id:
+        # Fallback: try iTunes API lookup
+        try:
+            import urllib.request
+            resp = urllib.request.urlopen(f'https://itunes.apple.com/lookup?id={adam_id}', timeout=10)
+            itunes_data = json.loads(resp.read())
+            results = itunes_data.get('results', [])
+            if results:
+                bundle_id = results[0].get('bundleId', '')
+        except Exception as e:
+            logger.warning(f"iTunes lookup failed for adamId {adam_id}: {e}")
+
+    if not bundle_id:
+        return {'success': False, 'error': f'Cannot find bundleId for adamId {adam_id}. Add app to {app_json_file} first.'}
+
+    # Look up serial numbers for all devices
+    device_serials = {}
+    try:
+        placeholders = ','.join(['%s'] * len(devices))
+        rows = db.query_all(
+            f"SELECT uuid, serial FROM device_inventory WHERE uuid IN ({placeholders})",
+            tuple(devices)
+        )
+        for row in rows:
+            device_serials[row['uuid']] = row['serial']
+    except Exception as e:
+        logger.error(f"Failed to look up device serials: {e}")
+        return {'success': False, 'error': f'Failed to look up device serials: {e}'}
+
     # Map to existing script names
     script_map = {
         ('ios', 'install'): 'install_vpp_app',
@@ -2975,7 +3169,7 @@ def execute_manage_vpp_app(params, user_info):
     output_lines = []
     output_lines.append("=" * 60)
     output_lines.append(f"MANAGE VPP APP - {platform.upper()} {action.upper()}")
-    output_lines.append(f"Adam ID: {adam_id}")
+    output_lines.append(f"Adam ID: {adam_id} ({bundle_id})")
     output_lines.append(f"Devices: {len(devices)}")
     output_lines.append("=" * 60)
 
@@ -2983,12 +3177,15 @@ def execute_manage_vpp_app(params, user_info):
     fail_count = 0
 
     def run_vpp_cmd(udid):
+        serial = device_serials.get(udid)
+        if not serial:
+            return {'success': False, 'udid': udid, 'error': 'Serial number not found in device_inventory'}
         try:
             env = os.environ.copy()
             env['PATH'] = '/usr/local/bin:/usr/bin:/bin:' + env.get('PATH', '')
 
             result = subprocess.run(
-                [script_path, udid, adam_id],
+                [script_path, udid, adam_id, serial, bundle_id],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -2998,9 +3195,9 @@ def execute_manage_vpp_app(params, user_info):
             )
 
             if result.returncode == 0:
-                return {'success': True, 'udid': udid}
+                return {'success': True, 'udid': udid, 'output': result.stdout}
             else:
-                return {'success': False, 'udid': udid, 'error': result.stderr or 'Command failed'}
+                return {'success': False, 'udid': udid, 'error': (result.stderr or result.stdout or 'Command failed').strip()}
 
         except subprocess.TimeoutExpired:
             return {'success': False, 'udid': udid, 'error': 'Timeout'}

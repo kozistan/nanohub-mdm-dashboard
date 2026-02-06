@@ -235,6 +235,8 @@ ADMIN_DDM_TEMPLATE = '''
     .status-badge { padding:2px 8px; border-radius:10px; font-size:0.8em; }
     .status-uploaded { background:rgba(95,200,18,0.15); color:#5FC812; border:1px solid #5FC812; }
     .status-pending { background:rgba(245,166,35,0.15); color:#F5A623; border:1px solid #F5A623; }
+    .status-warning { background:rgba(217,31,37,0.15); color:#D91F25; border:1px solid #D91F25; font-size:0.75em; }
+    .decl-hint { color:#888; font-size:0.85em; }
     .modal-box textarea { min-height:200px; font-family:monospace; }
     </style>
 </head>
@@ -417,7 +419,7 @@ ADMIN_DDM_TEMPLATE = '''
 
     <!-- Add/Edit Set Modal -->
     <div id="addSetModal" class="modal-overlay">
-        <div class="modal-box">
+        <div class="modal-box wide">
             <h3 id="setModalTitle">Create Set</h3>
             <div class="modal-body">
                 <input type="hidden" id="editSetId">
@@ -683,19 +685,68 @@ ADMIN_DDM_TEMPLATE = '''
         document.getElementById('addSetModal').style.display = 'flex';
     }
 
+    // Store declarations for warning checks
+    let setEditorDecls = [];
+
     function loadDeclarationsForSet(selectedIds) {
         fetch('/admin/api/ddm/declarations')
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
+                    setEditorDecls = data.declarations || [];
                     let html = '';
                     data.declarations.forEach(d => {
                         const checked = selectedIds.includes(d.id) ? 'checked' : '';
-                        html += '<label><input type="checkbox" value="' + d.id + '" ' + checked + '> ' + d.identifier + '</label>';
+                        let hint = '';
+                        if (d.type.indexOf('com.apple.activation') === 0) hint = ' <span class="decl-hint">(activation)</span>';
+                        else if (d.type.indexOf('com.apple.configuration') === 0) hint = ' <span class="decl-hint">(config)</span>';
+                        else if (d.type.indexOf('com.apple.management') === 0) hint = ' <span class="decl-hint">(mgmt)</span>';
+                        html += '<label data-id="' + d.id + '"><input type="checkbox" value="' + d.id + '" ' + checked + ' onchange="checkSetWarnings()"> ' + d.identifier + hint + '<span class="decl-warn"></span></label>';
                     });
                     document.getElementById('setDeclarationsList').innerHTML = html || '<p style="color:#B0B0B0;">No declarations available</p>';
+                    checkSetWarnings();
                 }
             });
+    }
+
+    function checkSetWarnings() {
+        var boxes = document.querySelectorAll('#setDeclarationsList input:checked');
+        var selIds = [];
+        for (var i = 0; i < boxes.length; i++) selIds.push(parseInt(boxes[i].value));
+
+        // Find activation and its StandardConfigurations
+        var stdCfgs = null;
+        for (var i = 0; i < setEditorDecls.length; i++) {
+            var d = setEditorDecls[i];
+            if (selIds.indexOf(d.id) >= 0 && d.type.indexOf('com.apple.activation') === 0) {
+                try {
+                    var p = typeof d.payload === 'string' ? JSON.parse(d.payload) : d.payload;
+                    if (p && p.StandardConfigurations) stdCfgs = p.StandardConfigurations;
+                } catch(e) {}
+            }
+        }
+
+        // Update warnings
+        for (var i = 0; i < setEditorDecls.length; i++) {
+            var d = setEditorDecls[i];
+            var lbl = document.querySelector('label[data-id="' + d.id + '"]');
+            if (!lbl) continue;
+            var warn = lbl.querySelector('.decl-warn');
+            if (!warn) continue;
+
+            var isConfig = d.type.indexOf('com.apple.configuration') === 0 && d.type.indexOf('com.apple.configuration.management') !== 0;
+            if (isConfig) {
+                if (stdCfgs === null) {
+                    warn.innerHTML = ' <span class="status-badge status-warning">no activation</span>';
+                } else if (stdCfgs.indexOf(d.identifier) < 0) {
+                    warn.innerHTML = ' <span class="status-badge status-warning">not in activation</span>';
+                } else {
+                    warn.innerHTML = '';
+                }
+            } else {
+                warn.innerHTML = '';
+            }
+        }
     }
 
     function editSet(id) {

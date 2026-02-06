@@ -24,6 +24,7 @@ HELP_PAGES = {
     'index': 'Overview',
     'commands': 'Commands',
     'ddm': 'DDM',
+    'ddm-status-and-auto-assignment': 'DDM Status & Auto-Assign',
     'vpp': 'VPP',
     'devices': 'Devices',
     'reports': 'Reports',

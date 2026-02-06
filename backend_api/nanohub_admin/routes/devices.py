@@ -6,6 +6,10 @@ Device inventory list and device detail pages.
 
 import json
 import logging
+import os
+import urllib.request
+import urllib.error
+import base64
 
 from flask import Blueprint, render_template_string, session, request, jsonify
 
@@ -697,24 +701,8 @@ DEVICE_DETAIL_TEMPLATE = '''
                         <div class="value" style="font-size:0.9em; font-family:monospace;">{{ device.uuid }}</div>
                     </div>
                     <div class="info-card">
-                        <label>Serial Number</label>
-                        <div class="value">{{ device.serial or '-' }}</div>
-                    </div>
-                    <div class="info-card">
-                        <label>Hostname</label>
-                        <div class="value">{{ device.hostname or '-' }}</div>
-                    </div>
-                    <div class="info-card">
-                        <label>Operating System</label>
-                        <div class="value">{{ device.os | upper }}</div>
-                    </div>
-                    <div class="info-card">
                         <label>Manifest</label>
                         <div class="value">{{ device.manifest or 'default' }}</div>
-                    </div>
-                    <div class="info-card">
-                        <label>DEP Enrolled</label>
-                        <div class="value">{{ 'Yes' if device.dep in ['1', 'enabled', True] else 'No' }}</div>
                     </div>
                     <div class="info-card">
                         <label>Status</label>
@@ -851,15 +839,28 @@ DEVICE_DETAIL_TEMPLATE = '''
 
             <!-- DDM Tab -->
             <div id="tab-content-ddm" class="tab-content">
+                <!-- DDM Declarations Section -->
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
                     <div>
                         <h3 style="margin:0;display:inline;">DDM Declarations</h3>
                         <span id="ddm-timestamp" style="margin-left:15px;"></span>
                     </div>
-                    <button class="btn" onclick="refreshData('ddm')">Refresh</button>
+                    <button class="btn" onclick="refreshData('ddm')">Refresh Declarations</button>
                 </div>
-                <div id="ddm-loading" style="display:none;"><span class="loading-spinner"></span> Querying DDM status...</div>
-                <div id="ddm-content"></div>
+                <div id="ddm-loading" style="display:none;"><span class="loading-spinner"></span> Querying DDM declarations...</div>
+                <div id="ddm-content" style="margin-bottom:30px;"></div>
+
+                <!-- DDM Status Values Section -->
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+                    <div>
+                        <h3 style="margin:0;display:inline;">DDM Status</h3>
+                        <span id="ddm-status-timestamp" style="margin-left:15px;"></span>
+                    </div>
+                    <button class="btn" onclick="loadDdmStatus()">Refresh Status</button>
+                    <button class="btn" onclick="forceDdmSync()" style="margin-left:8px;" title="Send push notification to force device DDM sync">Force Sync</button>
+                </div>
+                <div id="ddm-status-loading" style="display:none;"><span class="loading-spinner"></span> Loading DDM status...</div>
+                <div id="ddm-status-content"></div>
             </div>
 
             <!-- History Tab -->
@@ -914,6 +915,14 @@ DEVICE_DETAIL_TEMPLATE = '''
             document.getElementById('tab-content-' + tabName).classList.add('active');
             btn.classList.add('active');
             updatePanelLayout();
+
+            // Load DDM status when switching to DDM tab
+            if (tabName === 'ddm') {
+                const statusContainer = document.getElementById('ddm-status-content');
+                if (statusContainer && statusContainer.innerHTML === '') {
+                    loadDdmStatus();
+                }
+            }
         }
 
         // Updates panel layout class based on whether active data tab has content
@@ -978,6 +987,132 @@ DEVICE_DETAIL_TEMPLATE = '''
 
         function refreshData(type) {
             loadData(type, true);  // Force refresh from MDM
+        }
+
+        // Load DDM Status Values
+        function loadDdmStatus() {
+            const container = document.getElementById('ddm-status-content');
+            const loading = document.getElementById('ddm-status-loading');
+            const timestamp = document.getElementById('ddm-status-timestamp');
+
+            loading.style.display = 'block';
+            container.innerHTML = '';
+
+            fetch('/admin/api/device/' + deviceUuid + '/ddm-status')
+                .then(r => r.json())
+                .then(response => {
+                    loading.style.display = 'none';
+                    if (!response.success) {
+                        container.innerHTML = '<div class="error-box">Error: ' + (response.error || 'Unknown error') + '</div>';
+                        return;
+                    }
+                    if (!response.data || !response.data.categories) {
+                        container.innerHTML = '<div class="info-box" style="background:rgba(245,166,35,0.1);border-color:#F5A623;"><span style="color:#F5A623;">No DDM status data available. Click "Refresh Declarations" to trigger a sync.</span></div>';
+                        return;
+                    }
+
+                    // Update timestamp
+                    if (response.data.updated_at) {
+                        timestamp.innerHTML = '<span class="timestamp">Last updated: ' + response.data.updated_at + '</span>';
+                    }
+
+                    const categories = response.data.categories;
+                    const categoryOrder = ['device', 'passcode', 'softwareupdate', 'security'];
+
+                    // Sort categories by preferred order (exclude management - shown separately)
+                    const sortedCategories = Object.keys(categories)
+                        .filter(c => c !== 'management')
+                        .sort((a, b) => {
+                            const aIdx = categoryOrder.indexOf(a);
+                            const bIdx = categoryOrder.indexOf(b);
+                            if (aIdx >= 0 && bIdx >= 0) return aIdx - bIdx;
+                            if (aIdx >= 0) return -1;
+                            if (bIdx >= 0) return 1;
+                            return a.localeCompare(b);
+                        });
+
+                    // Helper to build terminal output for a category
+                    function buildTerminalOutput(items) {
+                        let maxKeyLen = 0;
+                        items.forEach(item => {
+                            const keyLen = item.key.replace(/-/g, ' ').length;
+                            if (keyLen > maxKeyLen) maxKeyLen = keyLen;
+                        });
+                        let output = '';
+                        items.forEach(item => {
+                            const key = item.key.replace(/-/g, ' ');
+                            const padding = ' '.repeat(Math.max(0, maxKeyLen - key.length + 2));
+                            let val = item.value || '-';
+                            if (val === 'true' || val === '1') {
+                                val = '\\x1b[32mYes\\x1b[0m';
+                            } else if (val === 'false' || val === '0') {
+                                val = '\\x1b[31mNo\\x1b[0m';
+                            }
+                            output += key + padding + val + '\\n';
+                        });
+                        output = output.replace(/\\n$/, '');
+                        output = output.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        output = output.replace(/\\x1b\\[32m/g, '<span style="color:#5FC812">');
+                        output = output.replace(/\\x1b\\[31m/g, '<span style="color:#dc2626">');
+                        output = output.replace(/\\x1b\\[0m/g, '</span>');
+                        return output;
+                    }
+
+                    // Render main categories as terminal boxes (2 columns)
+                    let html = '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(400px, 1fr));gap:15px;">';
+
+                    for (const category of sortedCategories) {
+                        const items = categories[category];
+                        const output = buildTerminalOutput(items);
+                        html += '<div>';
+                        html += '<div style="font-size:0.85em;font-weight:600;color:#FFFFFF;margin-bottom:8px;text-transform:capitalize;">' + category + '</div>';
+                        html += '<div class="output-panel success" style="max-height:250px;min-height:auto;margin-top:0;">' + output + '</div>';
+                        html += '</div>';
+                    }
+
+                    html += '</div>';
+
+                    // Add collapsible management section (client-capabilities) if present
+                    if (categories.management && categories.management.length > 0) {
+                        const mgmtItems = categories.management;
+                        const capList = mgmtItems.map(i => i.value).join(', ');
+                        html += '<details style="margin-top:20px;">';
+                        html += '<summary style="cursor:pointer;color:#888;font-size:0.85em;user-select:none;">Supported Capabilities (' + mgmtItems.length + ' items)</summary>';
+                        html += '<div style="margin-top:10px;padding:12px;background:rgba(30,30,30,0.6);border-radius:6px;font-size:0.8em;color:#888;line-height:1.6;max-height:150px;overflow-y:auto;">' + capList + '</div>';
+                        html += '</details>';
+                    }
+
+                    container.innerHTML = html;
+                })
+                .catch(err => {
+                    loading.style.display = 'none';
+                    container.innerHTML = '<div class="error-box">Failed to load DDM status: ' + err.message + '</div>';
+                });
+        }
+
+        // Force DDM Sync - send push notification to device
+        function forceDdmSync() {
+            const btn = event.target;
+            btn.disabled = true;
+            const originalText = btn.textContent;
+            btn.textContent = 'Sending...';
+
+            fetch('/admin/api/device/' + deviceUuid + '/ddm-sync', {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                    if (data.success) {
+                        alert('Push notification sent. Device will sync DDM declarations on next wake/unlock.');
+                    } else {
+                        alert('Failed to send push: ' + (data.error || 'Unknown error'));
+                    }
+                })
+                .catch(err => {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                    alert('Error: ' + err.message);
+                });
         }
 
         function renderData(type, data, container) {
@@ -1707,3 +1842,131 @@ def api_device_cached(device_uuid):
             'data': None,
             'message': 'No cached data available'
         })
+
+
+@devices_bp.route('/api/device/<device_uuid>/ddm-status', methods=['GET'])
+@login_required_admin
+def api_device_ddm_status(device_uuid):
+    """API endpoint to get DDM status values from status_values table"""
+    user = session.get('user', {})
+
+    # Validate device access
+    if user.get('manifest_filter'):
+        if not validate_device_access(device_uuid, user):
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+
+    try:
+        # Get enrollment_id for this device
+        enrollment = db.query_one(
+            "SELECT id FROM enrollments WHERE device_id = %s ORDER BY last_seen_at DESC LIMIT 1",
+            (device_uuid,)
+        )
+        if not enrollment:
+            return jsonify({'success': True, 'data': None, 'message': 'No enrollment found'})
+
+        enrollment_id = enrollment['id']
+
+        # Get status values grouped by category
+        # Note: client-capabilities filtered out at save time in webhook
+        rows = db.query_all(
+            """SELECT path, value, value_type, updated_at
+               FROM status_values
+               WHERE enrollment_id = %s
+               ORDER BY path""",
+            (enrollment_id,)
+        )
+
+        if not rows:
+            return jsonify({'success': True, 'data': None, 'message': 'No DDM status data'})
+
+        # Organize into categories based on path
+        categories = {}
+        for row in rows:
+            path = row['path']
+            # Extract category from path like ".StatusItems.device.identifier.serial-number"
+            parts = path.split('.')
+            if len(parts) >= 3:
+                category = parts[2]  # device, management, passcode, etc.
+            else:
+                category = 'other'
+
+            if category not in categories:
+                categories[category] = []
+
+            # Extract the leaf key name
+            key = parts[-1] if parts else path
+
+            categories[category].append({
+                'key': key,
+                'value': row['value'],
+                'type': row['value_type'],
+                'path': path
+            })
+
+        # Get last update timestamp
+        last_update = db.query_one(
+            "SELECT MAX(updated_at) as last_update FROM status_values WHERE enrollment_id = %s",
+            (enrollment_id,)
+        )
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'categories': categories,
+                'updated_at': str(last_update['last_update']) if last_update and last_update['last_update'] else None
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Failed to get DDM status for {device_uuid}: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@devices_bp.route('/api/device/<device_uuid>/ddm-sync', methods=['POST'])
+@login_required_admin
+def api_device_ddm_sync(device_uuid):
+    """API endpoint to send push notification for DDM sync"""
+    user = session.get('user', {})
+
+    # Validate device access
+    if user.get('manifest_filter'):
+        if not validate_device_access(device_uuid, user):
+            return jsonify({'success': False, 'error': 'Access denied'}), 403
+
+    try:
+        # Load API credentials
+        nanohub_url = 'http://localhost:9004'
+        api_key = ''
+        env_file = '/opt/nanohub/environment.sh'
+        if os.path.exists(env_file):
+            with open(env_file, 'r') as f:
+                for line in f:
+                    if line.startswith('export NANOHUB_URL='):
+                        nanohub_url = line.split('=', 1)[1].strip().strip('"\'')
+                    elif line.startswith('export NANOHUB_API_KEY='):
+                        api_key = line.split('=', 1)[1].strip().strip('"\'')
+
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API key not configured'})
+
+        # Send push notification via NanoMDM API
+        auth_string = base64.b64encode(f"nanohub:{api_key}".encode()).decode()
+        req = urllib.request.Request(
+            f"{nanohub_url}/api/v1/nanomdm/push/{device_uuid}",
+            headers={'Authorization': f'Basic {auth_string}'},
+            method='PUT'
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
+
+        logger.info(f"DDM sync push sent for device {device_uuid} by {user.get('username', 'unknown')}")
+        return jsonify({'success': True})
+
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode() if e.fp else str(e)
+        logger.error(f"Failed to send DDM sync push for {device_uuid}: {e} - {error_body}")
+        return jsonify({'success': False, 'error': f'Push failed: {error_body}'})
+    except Exception as e:
+        logger.error(f"Failed to send DDM sync push for {device_uuid}: {e}")
+        return jsonify({'success': False, 'error': str(e)})

@@ -19,7 +19,7 @@ import urllib.error
 from datetime import datetime
 
 from config import Config
-from db_utils import db, devices, command_history, device_details, required_profiles
+from db_utils import db, devices, command_history, device_details, required_profiles, ddm_compliance
 from command_registry import get_available_profiles, get_command
 from cache_utils import device_cache
 
@@ -812,7 +812,7 @@ def get_devices_full(manifest_filter=None, search_term=None):
         rows = db.query_all(f"""
             SELECT
                 di.uuid, di.hostname, di.serial, di.os, di.manifest, di.account, di.dep,
-                dd.hardware_data, dd.security_data, dd.profiles_data,
+                dd.hardware_data, dd.security_data, dd.profiles_data, dd.ddm_data,
                 e.max_last_seen,
                 CASE
                     WHEN e.max_last_seen IS NULL THEN 'offline'
@@ -838,6 +838,22 @@ def get_devices_full(manifest_filter=None, search_term=None):
 
             # Try to get processed data from cache
             cached = device_cache.get(device_uuid)
+
+            # DDM compliance check (always from DB, not cached - DDM data changes frequently)
+            ddm_data = row.get('ddm_data')
+            if ddm_data:
+                if isinstance(ddm_data, bytes):
+                    ddm_data = ddm_data.decode('utf-8')
+                if isinstance(ddm_data, str):
+                    try:
+                        ddm_data = json.loads(ddm_data)
+                    except:
+                        ddm_data = []
+                elif not isinstance(ddm_data, list):
+                    ddm_data = []
+            else:
+                ddm_data = []
+            ddm_check = ddm_compliance.check_device_ddm(manifest, os_type, ddm_data)
 
             if cached:
                 os_ver = cached.get('os_version', '-')
@@ -935,6 +951,10 @@ def get_devices_full(manifest_filter=None, search_term=None):
                 'profiles_missing': profile_check['missing'],
                 'profiles_complete': profile_check['complete'],
                 'profiles_missing_list': profile_check['missing_list'],
+                'ddm_required': ddm_check['required'],
+                'ddm_active': ddm_check['valid'],  # Use 'valid' count (same as Reports)
+                'ddm_complete': ddm_check['complete'],
+                'ddm_missing_list': ddm_check['missing_list'],
                 'last_seen': last_seen_str,
                 'status': row.get('status', 'offline')
             }

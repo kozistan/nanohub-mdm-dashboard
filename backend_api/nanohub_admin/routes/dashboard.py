@@ -202,10 +202,10 @@ ADMIN_COMMAND_TEMPLATE = '''
                     <div class="device-table-container" id="device-table-container" style="max-height: 400px; flex: none;">
                         <table class="device-table" id="device-table">
                             <thead>
-                                <tr><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>DEP</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
+                                <tr><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>Profiles</th><th>DDM</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
                             </thead>
                             <tbody id="device-tbody">
-                                <tr><td colspan="12" style="text-align:center;color:#B0B0B0;">Click "Show All" or search for devices</td></tr>
+                                <tr><td colspan="13" style="text-align:center;color:#B0B0B0;">Click "Show All" or search for devices</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -242,7 +242,7 @@ ADMIN_COMMAND_TEMPLATE = '''
                     <div class="device-table-container" id="device-table-container" style="max-height: 400px; flex: none;">
                         <table class="device-table" id="device-table">
                             <thead>
-                                <tr><th><input type="checkbox" id="select-all" onchange="toggleSelectAll()"></th><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>DEP</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
+                                <tr><th><input type="checkbox" id="select-all" onchange="toggleSelectAll()"></th><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>Profiles</th><th>DDM</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
                             </thead>
                             <tbody id="device-tbody">
                                 <tr><td colspan="13" style="text-align:center;color:#B0B0B0;">Click "Show All" or search for devices</td></tr>
@@ -282,10 +282,10 @@ ADMIN_COMMAND_TEMPLATE = '''
                     <div class="device-table-container" id="autofill-device-table-container" style="max-height: 400px; flex: none;">
                         <table class="device-table" id="autofill-device-table">
                             <thead>
-                                <tr><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>DEP</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
+                                <tr><th>Hostname</th><th>Serial</th><th>OS</th><th>Version</th><th>Model</th><th>Manifest</th><th>Profiles</th><th>DDM</th><th>Supervised</th><th>Encrypted</th><th>Outdated</th><th>Last Check-in</th><th>Status</th></tr>
                             </thead>
                             <tbody id="autofill-device-tbody">
-                                <tr><td colspan="12" style="text-align:center;color:#B0B0B0;">Click "Show All" or search for devices</td></tr>
+                                <tr><td colspan="13" style="text-align:center;color:#B0B0B0;">Click "Show All" or search for devices</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -312,6 +312,9 @@ ADMIN_COMMAND_TEMPLATE = '''
                 {% if command.parameters|length > 3 %}
                 </div>
                 {% endif %}
+
+                <div id="ddm-sets-info" style="display:none;margin-top:12px;padding:8px 12px;background:#1a1a1a;border:1px solid #333;border-radius:4px;font-size:0.85em;color:#B0B0B0;">
+                </div>
 
                 <div style="margin-top:20px;">
                     <button type="submit" class="btn {% if command.dangerous %}red{% endif %}">
@@ -364,7 +367,7 @@ ADMIN_COMMAND_TEMPLATE = '''
     function showAllDevices() {
         // Clear table immediately and show loading state
         const tbody = document.getElementById('device-tbody');
-        if (tbody) tbody.innerHTML = '<tr><td colspan="' + (isMultiSelect ? '13' : '12') + '" style="text-align:center;color:#B0B0B0;">Loading...</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="' + (isMultiSelect ? '14' : '13') + '" style="text-align:center;color:#B0B0B0;">Loading...</td></tr>';
         // Remove inline style limit for full-height display
         const container = document.getElementById('device-table-container');
         if (container) {
@@ -392,7 +395,7 @@ ADMIN_COMMAND_TEMPLATE = '''
         }
         // Clear table immediately and show loading state
         const tbody = document.getElementById('device-tbody');
-        if (tbody) tbody.innerHTML = '<tr><td colspan="' + (isMultiSelect ? '13' : '12') + '" style="text-align:center;color:#B0B0B0;">Searching...</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="' + (isMultiSelect ? '14' : '13') + '" style="text-align:center;color:#B0B0B0;">Searching...</td></tr>';
         // Reset to compact display for search results
         const container = document.getElementById('device-table-container');
         if (container) {
@@ -441,7 +444,7 @@ ADMIN_COMMAND_TEMPLATE = '''
     function renderDevices(devices) {
         const tbody = document.getElementById('device-tbody');
         if (!devices.length) {
-            tbody.innerHTML = '<tr><td colspan="' + (isMultiSelect ? '13' : '12') + '" style="text-align:center;color:#B0B0B0;">No devices found</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="' + (isMultiSelect ? '14' : '13') + '" style="text-align:center;color:#B0B0B0;">No devices found</td></tr>';
             return;
         }
 
@@ -451,6 +454,12 @@ ADMIN_COMMAND_TEMPLATE = '''
             const osClass = (dev.os || '').toLowerCase();
             const yesClass = 'color:#16a34a;font-weight:500;';
             const noClass = 'color:#dc2626;font-weight:500;';
+            // Profiles and DDM status
+            const profilesOk = dev.profiles_complete !== false;
+            const profilesText = (dev.profiles_installed || 0) + '/' + (dev.profiles_required || 0);
+            const ddmOk = dev.ddm_complete !== false;
+            const ddmText = (dev.ddm_active || 0) + '/' + (dev.ddm_required || 0);
+
             if (isMultiSelect) {
                 html += `<tr onclick="toggleDeviceCheckbox('${dev.uuid}', this)">
                     <td><input type="checkbox" name="devices" value="${dev.uuid}" onclick="event.stopPropagation()"></td>
@@ -460,7 +469,8 @@ ADMIN_COMMAND_TEMPLATE = '''
                     <td>${dev.os_version || '-'}</td>
                     <td>${dev.model || '-'}</td>
                     <td>${dev.manifest || '-'}</td>
-                    <td><span style="${dev.dep === 'Yes' ? yesClass : noClass}">${dev.dep || '-'}</span></td>
+                    <td><span style="${profilesOk ? yesClass : noClass}">${profilesText}</span></td>
+                    <td><span style="${ddmOk ? yesClass : noClass}">${ddmText}</span></td>
                     <td><span style="${dev.supervised === 'Yes' ? yesClass : noClass}">${dev.supervised || '-'}</span></td>
                     <td><span style="${dev.encrypted === 'Yes' ? yesClass : noClass}">${dev.encrypted || '-'}</span></td>
                     <td><span style="${dev.outdated === 'Yes' ? noClass : yesClass}">${dev.outdated || '-'}</span></td>
@@ -475,7 +485,8 @@ ADMIN_COMMAND_TEMPLATE = '''
                     <td>${dev.os_version || '-'}</td>
                     <td>${dev.model || '-'}</td>
                     <td>${dev.manifest || '-'}</td>
-                    <td><span style="${dev.dep === 'Yes' ? yesClass : noClass}">${dev.dep || '-'}</span></td>
+                    <td><span style="${profilesOk ? yesClass : noClass}">${profilesText}</span></td>
+                    <td><span style="${ddmOk ? yesClass : noClass}">${ddmText}</span></td>
                     <td><span style="${dev.supervised === 'Yes' ? yesClass : noClass}">${dev.supervised || '-'}</span></td>
                     <td><span style="${dev.encrypted === 'Yes' ? yesClass : noClass}">${dev.encrypted || '-'}</span></td>
                     <td><span style="${dev.outdated === 'Yes' ? noClass : yesClass}">${dev.outdated || '-'}</span></td>
@@ -528,7 +539,7 @@ ADMIN_COMMAND_TEMPLATE = '''
     function showAllAutofillDevices() {
         // Clear table immediately and show loading state
         const tbody = document.getElementById('autofill-device-tbody');
-        if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#B0B0B0;">Loading...</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:#B0B0B0;">Loading...</td></tr>';
         // Remove inline style limit for full-height display
         const container = document.getElementById('autofill-device-table-container');
         if (container) {
@@ -556,7 +567,7 @@ ADMIN_COMMAND_TEMPLATE = '''
         }
         // Clear table immediately and show loading state
         const tbody = document.getElementById('autofill-device-tbody');
-        if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#B0B0B0;">Searching...</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:#B0B0B0;">Searching...</td></tr>';
         // Reset to compact display for search results
         const container = document.getElementById('autofill-device-table-container');
         if (container) {
@@ -598,7 +609,7 @@ ADMIN_COMMAND_TEMPLATE = '''
         if (!tbody) return;
 
         if (!devices.length) {
-            tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#B0B0B0;">No devices found</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:#B0B0B0;">No devices found</td></tr>';
             return;
         }
 
@@ -608,6 +619,11 @@ ADMIN_COMMAND_TEMPLATE = '''
             const osClass = (dev.os || '').toLowerCase();
             const yesClass = 'color:#16a34a;font-weight:500;';
             const noClass = 'color:#dc2626;font-weight:500;';
+            // Profiles and DDM status
+            const profilesOk = dev.profiles_complete !== false;
+            const profilesText = (dev.profiles_installed || 0) + '/' + (dev.profiles_required || 0);
+            const ddmOk = dev.ddm_complete !== false;
+            const ddmText = (dev.ddm_active || 0) + '/' + (dev.ddm_required || 0);
             // Store device data as JSON in data attribute for autofill
             const devJson = JSON.stringify(dev).replace(/'/g, "\\'").replace(/"/g, '&quot;');
             html += `<tr onclick="selectAutofillDevice(this)" data-device="${devJson}">
@@ -617,7 +633,8 @@ ADMIN_COMMAND_TEMPLATE = '''
                 <td>${dev.os_version || '-'}</td>
                 <td>${dev.model || '-'}</td>
                 <td>${dev.manifest || '-'}</td>
-                <td><span style="${dev.dep === 'Yes' ? yesClass : noClass}">${dev.dep || '-'}</span></td>
+                <td><span style="${profilesOk ? yesClass : noClass}">${profilesText}</span></td>
+                <td><span style="${ddmOk ? yesClass : noClass}">${ddmText}</span></td>
                 <td><span style="${dev.supervised === 'Yes' ? yesClass : noClass}">${dev.supervised || '-'}</span></td>
                 <td><span style="${dev.encrypted === 'Yes' ? yesClass : noClass}">${dev.encrypted || '-'}</span></td>
                 <td><span style="${dev.outdated === 'Yes' ? noClass : yesClass}">${dev.outdated || '-'}</span></td>
@@ -644,7 +661,6 @@ ADMIN_COMMAND_TEMPLATE = '''
         const osField = document.getElementById('os');
         const manifestField = document.getElementById('manifest');
         const accountField = document.getElementById('account');
-        const depField = document.getElementById('dep');
 
         if (uuidField) uuidField.value = dev.uuid || '';
         if (serialField) serialField.value = dev.serial || '';
@@ -652,7 +668,11 @@ ADMIN_COMMAND_TEMPLATE = '''
         if (osField) osField.value = dev.os || '';
         if (manifestField) manifestField.value = dev.manifest || '';
         if (accountField) accountField.value = dev.account || '';
-        if (depField) depField.value = (dev.dep === 'enabled' || dev.dep === '1' || dev.dep === 1) ? '1' : '0';
+
+        // Update DDM sets info for selected device's manifest
+        if (typeof loadDdmSetsForManifest === 'function') {
+            loadDdmSetsForManifest(dev.manifest || '');
+        }
 
     }
 
@@ -660,11 +680,16 @@ ADMIN_COMMAND_TEMPLATE = '''
         document.querySelectorAll('#autofill-device-table tr').forEach(r => r.classList.remove('selected'));
 
         // Clear form fields
-        const fields = ['uuid', 'serial', 'hostname', 'os', 'manifest', 'account', 'dep'];
+        const fields = ['uuid', 'serial', 'hostname', 'os', 'manifest', 'account'];
         fields.forEach(f => {
             const el = document.getElementById(f);
             if (el) el.value = '';
         });
+
+        // Hide DDM sets info
+        if (typeof loadDdmSetsForManifest === 'function') {
+            loadDdmSetsForManifest('');
+        }
     }
 
     function executeCommand(event) {
@@ -749,17 +774,48 @@ ADMIN_COMMAND_TEMPLATE = '''
             });
     }
 
+    // Load DDM sets info for selected manifest
+    function loadDdmSetsForManifest(manifest) {
+        const container = document.getElementById('ddm-sets-info');
+        if (!container) return;
+
+        if (!manifest) {
+            container.style.display = 'none';
+            return;
+        }
+
+        fetch('/admin/api/ddm/required?manifest=' + encodeURIComponent(manifest))
+            .then(r => r.json())
+            .then(data => {
+                if (!data.required || data.required.length === 0) {
+                    container.style.display = 'none';
+                    return;
+                }
+                const sets = data.required.map(r =>
+                    '<span style="color:#5FC812;font-weight:bold;">' + r.set_name + '</span>' +
+                    ' <span style="color:#666;">(' + r.os + ', ' + r.declaration_count + ' decl)</span>'
+                );
+                container.innerHTML = 'DDM Sets: ' + sets.join(' · ');
+                container.style.display = 'block';
+            })
+            .catch(() => {
+                container.style.display = 'none';
+            });
+    }
+
     // Listen for manifest change
     const manifestSelect = document.getElementById('manifest');
     if (manifestSelect) {
         manifestSelect.addEventListener('change', function() {
             loadApplicationsForManifest(this.value);
             loadApplicationsForAppIdSelect(this.value);
+            loadDdmSetsForManifest(this.value);
         });
         // Load on page init if manifest is pre-selected
         if (manifestSelect.value) {
             loadApplicationsForManifest(manifestSelect.value);
             loadApplicationsForAppIdSelect(manifestSelect.value);
+            loadDdmSetsForManifest(manifestSelect.value);
         }
     }
 

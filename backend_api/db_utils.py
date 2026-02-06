@@ -1233,22 +1233,62 @@ class DDMComplianceDB:
                             'valid': decl.get('valid', decl.get('Valid', False))
                         }
 
+            # Count only declarations that are actually applied (in activation or management type)
+            # Skip declarations with valid='unknown' - they're in set but not in activation
+            applicable_count = 0
+
             for req in required_declarations:
                 req_id = req['identifier']
+                req_type = req.get('type', '')
+                # Management types (com.apple.management.*) don't need to be "active"
+                # They auto-apply via set assignment, not via activation
+                is_management_type = req_type.startswith('com.apple.management.')
+                # Activation declarations are always applicable
+                is_activation_type = req_type.startswith('com.apple.activation.')
+
                 if req_id in status_map:
                     status = status_map[req_id]
+                    status_valid_raw = status['valid']
+
+                    # Normalize valid value (can be string 'valid'/'unknown' or bool/int 1/0)
+                    # is_valid_ok = True if valid='valid' or valid=True or valid=1
+                    # is_unknown = True if valid='unknown' or valid=False or valid=0
+                    is_valid_ok = status_valid_raw == 'valid' or status_valid_raw is True or status_valid_raw == 1
+                    is_unknown = status_valid_raw == 'unknown' or status_valid_raw is False or status_valid_raw == 0 or status_valid_raw is None
+
+                    # Skip declarations not in activation (valid=unknown means not applied)
+                    # These are in set but not configured to apply
+                    if is_unknown and not is_management_type and not is_activation_type:
+                        continue  # Don't count as required
+
+                    applicable_count += 1
+
                     if status['active']:
                         active_count += 1
-                    if status['valid']:
+                    if is_valid_ok:
                         valid_count += 1
-                    if not status['active'] or not status['valid']:
-                        missing_list.append({'identifier': req_id, 'active': status['active'], 'valid': status['valid']})
+
+                    # For management types: only check valid (active=0 is expected)
+                    # For activation/configuration types: check both active and valid
+                    if is_management_type:
+                        is_ok = is_valid_ok
+                    else:
+                        is_ok = status['active'] and is_valid_ok
+
+                    if not is_ok:
+                        missing_list.append({'identifier': req_id, 'active': status['active'], 'valid': status_valid_raw, 'type': req_type})
                 else:
-                    missing_list.append({'identifier': req_id, 'active': False, 'valid': False})
+                    # Declaration not reported by device at all
+                    # Could be not applied or device hasn't synced
+                    applicable_count += 1  # Assume it should be applied
+                    missing_list.append({'identifier': req_id, 'active': False, 'valid': False, 'type': req_type})
+
+            # Use applicable_count instead of required_count for compliance
+            required_count = applicable_count
         else:
             # No status data - all required declarations are "missing"
             for req in required_declarations:
-                missing_list.append({'identifier': req['identifier'], 'active': False, 'valid': False})
+                missing_list.append({'identifier': req['identifier'], 'active': False, 'valid': False, 'type': req.get('type', '')})
 
         return {
             'required': required_count,

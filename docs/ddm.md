@@ -243,3 +243,70 @@ log show --predicate 'eventMessage CONTAINS "passcode"' --last 1h
 | Reports show 0/0 | Click "Refresh Data" to update cache |
 | Import failed | Check JSON file format and permissions in `/opt/nanohub/ddm/declarations/` |
 | Remove failed | Check KMFDDM server connectivity and API key |
+
+## DDM Auto-Assignment (2026-02)
+
+DDM sets are now automatically assigned based on device manifest and OS:
+
+### When Auto-Assignment Happens
+
+| Event | Behavior |
+|-------|----------|
+| **New Device Installation** | Phase 5 assigns DDM sets based on manifest+OS from `ddm_required_sets` table |
+| **Device Manager - Manifest Change** | Old sets removed, new sets assigned based on new manifest |
+
+### Configuration
+
+Required Sets tab defines the mapping:
+
+| Manifest | OS | DDM Set |
+|----------|-----|---------|
+| default | macos | sloto-macos-karlin-default |
+| tech | macos | sloto-macos-karlin-tech |
+| default-bel | macos | sloto-macos-bel-default |
+| ... | ... | ... |
+
+**Note:** Devices enrolled before this feature was added need manual assignment via "Manage DDM Sets" command.
+
+## Force Sync Button
+
+Located in Device Detail → DDM tab → **Force Sync** button.
+
+| Feature | Description |
+|---------|-------------|
+| **Purpose** | Send APNs push notification to device |
+| **Effect** | Device syncs DDM declarations on next wake/unlock |
+| **Use When** | Device seems out of sync, or after editing declaration payloads |
+
+**API:** `POST /admin/api/device/<uuid>/ddm-sync`
+
+## Upload Button (Declarations)
+
+Located in DDM page → Declarations tab → **Upload** button per row.
+
+| Feature | Description |
+|---------|-------------|
+| **Purpose** | Force-upload declaration to KMFDDM |
+| **Status Badge** | ✓ (green) = uploaded, "pending" (orange) = not uploaded |
+| **Use When** | After editing declaration payload in database |
+
+**API:** `POST /admin/api/ddm/declarations/<id>/upload`
+
+## DDM Status Display
+
+Device Detail → DDM tab shows status subscription data:
+
+### Categories
+
+| Category | Status Items |
+|----------|--------------|
+| **device** | serial-number, udid, model, os-version |
+| **passcode** | is-compliant, is-present |
+| **softwareupdate** | install-state, pending-version, failure-reason |
+| **security** | fde.enabled, certificate.list |
+
+**Note:** Some status items return "UnsupportedStatusValue" on macOS (passcode, security.fde).
+
+### Refresh Status Button
+
+Fetches cached DDM status from `status_values` table. Data is updated automatically when device syncs.
