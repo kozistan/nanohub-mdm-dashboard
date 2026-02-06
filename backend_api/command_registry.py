@@ -44,7 +44,7 @@ COMMANDS = {
     'bulk_new_device_installation': {
         'name': 'New Device Installation',
         'category': 'setup',
-        'description': 'Automated installation workflow - profiles and apps from DB based on manifest',
+        'description': 'Install profiles and apps for new device',
         'script': '_internal_bulk_install',
         'parameters': [
             {'name': 'manifest', 'label': 'Manifest', 'type': 'select', 'required': True,
@@ -104,7 +104,7 @@ COMMANDS = {
     'manage_profiles': {
         'name': 'Manage Profiles',
         'category': 'profiles',
-        'description': 'Install, remove or list profiles on one or more devices',
+        'description': 'Install, remove or list profiles',
         'script': '_internal_manage_profiles',
         'parameters': [
             {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
@@ -132,7 +132,7 @@ COMMANDS = {
     'ddm_status': {
         'name': 'DDM Status',
         'category': 'ddm',
-        'description': 'Show DDM declarations, sets, or device enrollment status',
+        'description': 'View DDM declarations and sets',
         'script': 'ddm-status.sh',
         'script_dir': '/opt/nanohub/ddm/scripts',
         'parameters': [
@@ -154,7 +154,7 @@ COMMANDS = {
     'manage_ddm_sets': {
         'name': 'Manage DDM Sets',
         'category': 'ddm',
-        'description': 'Assign or remove DDM sets on one or more devices',
+        'description': 'Assign or remove DDM sets',
         'script': '_internal_manage_ddm_sets',
         'parameters': [
             {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True, 'default': 'assign',
@@ -164,14 +164,7 @@ COMMANDS = {
              ]},
             {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
             {'name': 'set_name', 'label': 'DDM Set', 'type': 'select', 'required': True,
-             'options': [
-                 {'value': 'sloto-macos-karlin-default', 'label': 'macOS Karlin Default'},
-                 {'value': 'sloto-macos-karlin-tech', 'label': 'macOS Karlin Tech'},
-                 {'value': 'sloto-macos-bel-default', 'label': 'macOS Belehradska Default'},
-                 {'value': 'sloto-macos-bel-tech', 'label': 'macOS Belehradska Tech'},
-                 {'value': 'sloto-ios-karlin', 'label': 'iOS Karlin'},
-                 {'value': 'sloto-ios-bel', 'label': 'iOS Belehradska'},
-             ]},
+             'options': []},
         ],
         'dangerous': False,
         'min_role': 'operator',
@@ -199,7 +192,7 @@ COMMANDS = {
     'install_application': {
         'name': 'Install Application',
         'category': 'apps',
-        'description': 'Install application on one or more devices',
+        'description': 'Install application via manifest URL',
         'script': '_internal_install_application',
         'parameters': [
             {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
@@ -230,7 +223,7 @@ COMMANDS = {
     'device_action': {
         'name': 'Device Action',
         'category': 'device_control',
-        'description': 'Perform actions on device: Lock, Unlock, Restart, Erase, Clear Passcode',
+        'description': 'Lock, restart, erase or clear passcode',
         'script': '_internal_device_action',
         'parameters': [
             {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
@@ -259,7 +252,7 @@ COMMANDS = {
     'update_inventory': {
         'name': 'Update Inventory',
         'category': 'device_control',
-        'description': 'Update device inventory (hardware, security, profiles, apps) and cache in database',
+        'description': 'Refresh device inventory data',
         'script': '_internal_update_inventory',
         'parameters': [
             {'name': 'os_filter', 'label': 'OS Filter', 'type': 'select', 'required': False,
@@ -291,7 +284,7 @@ COMMANDS = {
     'schedule_os_update': {
         'name': 'Schedule OS Update',
         'category': 'os_updates',
-        'description': 'Schedule OS update on one or more devices',
+        'description': 'Schedule OS update',
         'script': '_internal_schedule_os_update',
         'parameters': [
             {'name': 'action', 'label': 'Install Action', 'type': 'select', 'required': True,
@@ -326,7 +319,7 @@ COMMANDS = {
     'available_os_updates': {
         'name': 'Available OS Updates',
         'category': 'os_updates',
-        'description': 'Get list of available OS updates for device',
+        'description': 'List available OS updates',
         'script': 'available_os_updates',
         'parameters': [
             {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
@@ -354,7 +347,7 @@ COMMANDS = {
     'manage_remote_desktop': {
         'name': 'Manage Remote Desktop',
         'category': 'remote_desktop',
-        'description': 'Enable or disable Remote Desktop on one or more macOS devices',
+        'description': 'Enable or disable Remote Desktop',
         'script': '_internal_manage_remote_desktop',
         'parameters': [
             {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
@@ -436,7 +429,7 @@ COMMANDS = {
     'system_report_full': {
         'name': 'Full System Report',
         'category': 'diagnostics',
-        'description': 'Get comprehensive system report from device',
+        'description': 'Get full system report',
         'script': 'system_report_full',
         'parameters': [
             {'name': 'udid', 'label': 'Device', 'type': 'device', 'required': True},
@@ -479,7 +472,7 @@ COMMANDS = {
     'manage_vpp_app': {
         'name': 'Manage VPP App',
         'category': 'vpp',
-        'description': 'Install or remove VPP application on one or more devices',
+        'description': 'Install or remove VPP app',
         'script': '_internal_manage_vpp_app',
         'parameters': [
             {'name': 'platform', 'label': 'Platform', 'type': 'select', 'required': True,
@@ -508,7 +501,7 @@ COMMANDS = {
     'device_manager': {
         'name': 'Device Manager',
         'category': 'setup',
-        'description': 'Add, update or delete devices in inventory',
+        'description': 'Add, update or delete devices',
         'script': '_internal',
         'has_device_autofill': True,
         'parameters': [
@@ -531,8 +524,6 @@ COMMANDS = {
              'options': '_DYNAMIC_MANIFESTS_DEFAULT'},
             {'name': 'account', 'label': 'Account', 'type': 'select', 'required': False,
              'options': '_DYNAMIC_ACCOUNTS_DEFAULT'},
-            {'name': 'dep', 'label': 'DEP', 'type': 'select', 'required': False,
-             'options': '_DYNAMIC_DEP_DEFAULT'},
         ],
         'dangerous': False,
         'min_role': 'operator',
@@ -541,7 +532,7 @@ COMMANDS = {
     'manage_applications': {
         'name': 'Manage Applications',
         'category': 'apps',
-        'description': 'Add, edit or remove applications for device installation',
+        'description': 'Manage application database',
         'script': '_internal_manage_applications',
         'parameters': [
             {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
@@ -575,7 +566,7 @@ COMMANDS = {
     'manage_command_queue': {
         'name': 'Command Queue',
         'category': 'other',
-        'description': 'Show or clear pending commands in device queue',
+        'description': 'View or clear command queue',
         'script': '_internal_manage_command_queue',
         'parameters': [
             {'name': 'action', 'label': 'Action', 'type': 'select', 'required': True,
@@ -594,7 +585,7 @@ COMMANDS = {
     'send_command': {
         'name': 'Send Command',
         'category': 'other',
-        'description': 'Send command to NanoHUB agent on device (test, hostname, shell, user management)',
+        'description': 'Send command to device agent',
         'script': 'send_command',
         'script_dir': '/opt/nanohub/tools/api/commands',
         'parameters': [

@@ -395,3 +395,42 @@ To see **all** DDM declarations for a device (not just those in ProfileList):
 - **Profiles tab**: Shows only DDM declarations that Apple reports as "profiles"
 - **DDM tab**: Shows all DDM declarations and their actual status
 - If a declaration shows in DDM tab but not in Profiles tab, this is normal behavior
+
+## Manage DDM Sets Command
+
+The **Manage DDM Sets** command allows bulk assignment or removal of DDM sets to multiple devices.
+
+### Location
+
+Commands → Manage DDM Sets
+
+### Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| **Action** | Assign Set or Remove Set |
+| **Devices** | Select one or multiple devices |
+| **DDM Set** | Dynamic dropdown - loads all sets from database |
+
+### Notes
+
+- The DDM Set dropdown is **dynamic** - when you create a new set in the DDM page, it automatically appears in this command
+- DDM sets are **additive** - assigning a new set doesn't remove existing ones
+- To replace a set, first remove the old one, then assign the new one
+
+## Management Declaration Status
+
+For **management** declarations (e.g., `com.apple.management.organization-info`):
+
+| Status | Meaning |
+|--------|---------|
+| `active=0, valid=valid` | **Normal** - management declarations don't need to be "active" |
+| `active=0, valid=invalid` | Error - check declaration JSON syntax |
+
+For **configuration** declarations (e.g., `com.apple.configuration.passcode.settings`):
+
+| Status | Meaning |
+|--------|---------|
+| `active=1, valid=valid` | Working correctly |
+| `active=0, valid=valid` | Not in activation's StandardConfigurations |
+| `active=0, valid=invalid` | Error - check declaration JSON syntax |

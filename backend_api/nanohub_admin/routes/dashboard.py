@@ -20,6 +20,7 @@ from command_registry import (
     COMMANDS, get_commands_by_category, get_command, check_role_permission
 )
 from nanohub_admin.utils import login_required_admin
+from db_utils import db
 from nanohub_admin.core import (
     get_manifests_list,
     get_profiles_by_category,
@@ -996,6 +997,12 @@ def admin_command(cmd_id):
         # Load applications list for Manage Applications command - empty by default, loaded via JS
         if param.get('name') == 'app_id' and param.get('type') == 'select':
             param['options'] = [{'value': '', 'label': '-- Select Manifest first --'}]
+        # Dynamic DDM sets loading
+        if param.get('name') == 'set_name' and param.get('type') == 'select':
+            # db already imported
+            ddm_sets = db.query_all("SELECT name FROM ddm_sets ORDER BY name")
+            param['options'] = [{'value': '', 'label': '-- Select DDM Set --'}]
+            param['options'].extend([{'value': s['name'], 'label': s['name']} for s in ddm_sets])
     profiles = get_profiles_by_category()
 
     # Check if command has 'devices' type parameter (multi-select)
