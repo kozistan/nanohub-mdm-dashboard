@@ -385,7 +385,7 @@ ADMIN_DDM_TEMPLATE = '''
 
     <!-- Add Declaration Modal -->
     <div id="addDeclarationModal" class="modal-overlay">
-        <div class="modal-box">
+        <div class="modal-box wide">
             <h3>Add Declaration</h3>
             <div class="modal-body">
                 <label>Identifier</label>
@@ -404,7 +404,7 @@ ADMIN_DDM_TEMPLATE = '''
 
     <!-- Import Declarations Modal -->
     <div id="importDeclarationsModal" class="modal-overlay">
-        <div class="modal-box">
+        <div class="modal-box wide">
             <h3>Import Declarations from Files</h3>
             <div class="modal-body">
                 <p class="text-muted" style="font-size:0.85em;margin-bottom:15px;">Import JSON declarations from /opt/nanohub/ddm/declarations/</p>
@@ -439,7 +439,7 @@ ADMIN_DDM_TEMPLATE = '''
 
     <!-- Add Required Set Modal -->
     <div id="addRequiredSetModal" class="modal-overlay">
-        <div class="modal-box">
+        <div class="modal-box wide">
             <h3>Assign DDM Set to Manifest</h3>
             <div class="modal-body">
                 <label>Manifest</label>
