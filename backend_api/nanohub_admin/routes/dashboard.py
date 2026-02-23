@@ -1044,7 +1044,12 @@ def admin_execute():
 
     # Check for bulk operation
     # Some commands handle device iteration internally (native bulk commands)
-    native_bulk_commands = ['bulk_schedule_os_update', 'bulk_new_device_installation', 'bulk_install_application']
+    native_bulk_commands = [
+        'bulk_schedule_os_update', 'bulk_new_device_installation', 'bulk_install_application',
+        # Consolidated commands that handle devices internally via normalize_devices_param
+        'manage_profiles', 'manage_ddm_sets', 'ddm_force_sync', 'install_application',
+        'update_inventory', 'schedule_os_update', 'manage_remote_desktop', 'manage_vpp_app',
+    ]
     if 'devices' in params and isinstance(params.get('devices'), list) and cmd_id not in native_bulk_commands:
         results = execute_bulk_command(cmd_id, params['devices'], params, user)
         return jsonify({'success': True, 'results': results})
