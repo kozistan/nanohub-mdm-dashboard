@@ -173,6 +173,9 @@ def admin_profiles():
     for p in profiles.get('wireguard', []):
         if p.get('identifier'):
             profile_options.append({'name': p['name'], 'identifier': p['identifier']})
+    for p in profiles.get('wifi', []):
+        if p.get('identifier'):
+            profile_options.append({'name': p['name'], 'identifier': p['identifier']})
 
     return render_template_string(
         ADMIN_PROFILES_TEMPLATE,
@@ -215,6 +218,9 @@ def api_profile_options():
     for p in profiles.get('wireguard', []):
         if p.get('identifier'):
             profile_options.append({'name': p['name'], 'identifier': p['identifier']})
+    for p in profiles.get('wifi', []):
+        if p.get('identifier'):
+            profile_options.append({'name': p['name'], 'identifier': p['identifier']})
 
     return jsonify({
         'count': len(profile_options),
@@ -222,6 +228,7 @@ def api_profile_options():
         'debug': {
             'system_count': len(profiles.get('system', [])),
             'wireguard_count': len(profiles.get('wireguard', [])),
+            'wifi_count': len(profiles.get('wifi', [])),
             'system_sample': system_raw,
             'wireguard_sample': wireguard_raw
         }

@@ -31,6 +31,7 @@ CATEGORIES = {
 PROFILE_DIRS = {
     'standard': get_path('PROFILES_DIR') or '/opt/nanohub/profiles/',
     'wireguard': get_path('WIREGUARD_DIR') or '/opt/nanohub/profiles/wireguard_configs/',
+    'wifi': get_path('WIFI_DIR') or '/opt/nanohub/profiles/wifi_configs/',
 }
 
 # Commands directory (loaded from config)
@@ -680,6 +681,19 @@ def get_available_profiles():
                 'rel_path': rel_path,
                 'identifier': _extract_profile_identifier(f),
                 'type': 'wireguard'
+            })
+
+
+    # WiFi EAP-TLS profiles - recursive search for signed profiles
+    if os.path.exists(PROFILE_DIRS['wifi']):
+        for f in glob.glob(os.path.join(PROFILE_DIRS['wifi'], '**/*.signed.mobileconfig'), recursive=True):
+            rel_path = os.path.relpath(f, PROFILE_DIRS['wifi'])
+            profiles.append({
+                'path': f,
+                'name': os.path.basename(f),
+                'rel_path': rel_path,
+                'identifier': _extract_profile_identifier(f),
+                'type': 'wifi'
             })
 
     return sorted(profiles, key=lambda x: x['name'])

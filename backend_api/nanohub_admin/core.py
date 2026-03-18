@@ -1035,12 +1035,15 @@ def get_profiles_by_category():
 
     result = {
         'system': [],
-        'wireguard': []
+        'wireguard': [],
+        'wifi': []
     }
 
     for p in profiles:
         if p['type'] == 'wireguard':
             result['wireguard'].append(p)
+        elif p['type'] == 'wifi':
+            result['wifi'].append(p)
         else:
             result['system'].append(p)
 

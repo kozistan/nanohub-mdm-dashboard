@@ -266,6 +266,11 @@ ADMIN_COMMAND_TEMPLATE = '''
                             <option value="{{ profile.path }}">{{ profile.name }}</option>
                             {% endfor %}
                             </optgroup>
+                            <optgroup label="WiFi EAP-TLS Profiles">
+                            {% for profile in profiles.wifi %}
+                            <option value="{{ profile.path }}">{{ profile.name }}</option>
+                            {% endfor %}
+                            </optgroup>
                         </select>
                     </div>
 
