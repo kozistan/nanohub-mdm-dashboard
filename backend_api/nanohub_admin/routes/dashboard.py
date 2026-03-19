@@ -136,7 +136,48 @@ ADMIN_COMMAND_TEMPLATE = '''
     .params-grid .form-group.full-width {
         grid-column: 1 / -1;
     }
-    </style>
+
+    /* Searchable profile select */
+    .searchable-select { position: relative; }
+    .searchable-select-trigger {
+        display: flex; align-items: center; justify-content: space-between;
+        background-color: #2A2A2A; border: 1px solid #3A3A3A; border-radius: 4px;
+        padding: 4px 8px; cursor: pointer; color: #FFFFFF; font-size: 0.72em;
+        font-family: var(--font-body); transition: border-color 0.2s;
+    }
+    .searchable-select-trigger:hover { border-color: #5FC812; }
+    .searchable-select-trigger.active { border-color: #5FC812; border-radius: 4px 4px 0 0; }
+    .searchable-select-arrow { font-size: 0.7em; color: #B0B0B0; }
+    .searchable-select-dropdown {
+        position: fixed; z-index: 9999;
+        background-color: #2A2A2A; border: 1px solid #5FC812; border-top: none;
+        border-radius: 0 0 4px 4px; max-height: 300px; display: flex; flex-direction: column;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    .searchable-select-search {
+        padding: 4px 8px; border: none; border-bottom: 1px solid #3A3A3A;
+        background-color: #1E1E1E; color: #FFFFFF; font-size: 0.72em;
+        font-family: var(--font-body); outline: none;
+    }
+    .searchable-select-search:focus { background-color: #1E1E1E; }
+    .searchable-select-options { overflow-y: auto; max-height: 250px; }
+    .searchable-select-group-label {
+        padding: 4px 8px; font-size: 0.65em; color: #5FC812; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.5px; background-color: #1A1A1A;
+        font-family: var(--font-heading);
+    }
+    .searchable-select-option {
+        padding: 4px 8px 4px 16px; cursor: pointer; font-size: 0.72em; color: #B0B0B0;
+        font-family: var(--font-body);
+    }
+    .searchable-select-option:hover { background: rgba(95,200,18,0.12); color: #FFFFFF; }
+    .searchable-select-option.selected { background: rgba(95,200,18,0.18); color: #5FC812; }
+    .searchable-select-option.hidden { display: none; }
+    .searchable-select-group-label.hidden { display: none; }
+    .searchable-select-no-results {
+        padding: 8px; text-align: center; color: #B0B0B0; font-size: 0.72em; font-style: italic;
+    }
+        </style>
 </head>
 <body class="page-with-table page-command">
     <div id="wrap">
@@ -169,7 +210,7 @@ ADMIN_COMMAND_TEMPLATE = '''
                 <div class="params-grid">
                 {% endif %}
                 {% for param in command.parameters %}
-                <div class="form-group {% if command.parameters|length > 3 and param.type in ['device', 'devices', 'device_autofill', 'select_multiple', 'profile'] %}full-width{% endif %}">
+                <div class="form-group {% if command.parameters|length > 3 and param.type in ['device', 'devices', 'device_autofill', 'select_multiple'] %}full-width{% endif %}">
                     <label>{{ param.label }}{% if param.required %} <span style="color:#e92128;">*</span>{% endif %}</label>
 
                     {% if param.type == 'device' %}
@@ -254,24 +295,30 @@ ADMIN_COMMAND_TEMPLATE = '''
 
                     {% elif param.type == 'profile' %}
                     <div class="profile-select-group">
-                        <select name="{{ param.name }}" id="{{ param.name }}" {% if param.required %}required{% endif %}>
-                            <option value="">-- Select Profile --</option>
-                            <optgroup label="System Profiles">
-                            {% for profile in profiles.system %}
-                            <option value="{{ profile.path }}">{{ profile.name }}</option>
-                            {% endfor %}
-                            </optgroup>
-                            <optgroup label="WireGuard Profiles">
-                            {% for profile in profiles.wireguard %}
-                            <option value="{{ profile.path }}">{{ profile.name }}</option>
-                            {% endfor %}
-                            </optgroup>
-                            <optgroup label="WiFi EAP-TLS Profiles">
-                            {% for profile in profiles.wifi %}
-                            <option value="{{ profile.path }}">{{ profile.name }}</option>
-                            {% endfor %}
-                            </optgroup>
-                        </select>
+                        <input type="hidden" name="{{ param.name }}" id="{{ param.name }}" {% if param.required %}required{% endif %}>
+                        <div class="searchable-select" id="{{ param.name }}-searchable">
+                            <div class="searchable-select-trigger" onclick="toggleProfileDropdown(this)">
+                                <span class="searchable-select-label">-- Select Profile --</span>
+                                <span class="searchable-select-arrow">&#9662;</span>
+                            </div>
+                            <div class="searchable-select-dropdown" style="display:none;">
+                                <input type="text" class="searchable-select-search" placeholder="Search profiles..." oninput="filterProfileOptions(this)" autofocus>
+                                <div class="searchable-select-options">
+                                    <div class="searchable-select-group-label">System Profiles</div>
+                                    {% for profile in profiles.system %}
+                                    <div class="searchable-select-option" data-value="{{ profile.path }}" data-group="system" onclick="selectProfileOption(this)">{{ profile.name }}</div>
+                                    {% endfor %}
+                                    <div class="searchable-select-group-label">WireGuard Profiles</div>
+                                    {% for profile in profiles.wireguard %}
+                                    <div class="searchable-select-option" data-value="{{ profile.path }}" data-group="wireguard" onclick="selectProfileOption(this)">{{ profile.name }}</div>
+                                    {% endfor %}
+                                    <div class="searchable-select-group-label">WiFi EAP-TLS Profiles</div>
+                                    {% for profile in profiles.wifi %}
+                                    <div class="searchable-select-option" data-value="{{ profile.path }}" data-group="wifi" onclick="selectProfileOption(this)">{{ profile.name }}</div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     {% elif param.type == 'device_autofill' %}
@@ -363,6 +410,123 @@ ADMIN_COMMAND_TEMPLATE = '''
     const isMultiSelect = {{ 'true' if has_devices_param else 'false' }};
     let allDevices = [];
     let pendingFormData = null;
+
+
+    // Searchable profile dropdown
+    function toggleProfileDropdown(trigger) {
+        const wrapper = trigger.closest('.searchable-select');
+        const dropdown = wrapper.querySelector('.searchable-select-dropdown');
+        const isOpen = dropdown.style.display !== 'none';
+
+        // Close all other dropdowns first
+        document.querySelectorAll('.searchable-select-dropdown').forEach(d => {
+            d.style.display = 'none';
+            d.closest('.searchable-select').querySelector('.searchable-select-trigger').classList.remove('active');
+        });
+
+        if (!isOpen) {
+            // Position dropdown using fixed coordinates
+            const rect = trigger.getBoundingClientRect();
+            dropdown.style.left = rect.left + 'px';
+            dropdown.style.top = rect.bottom + 'px';
+            dropdown.style.width = rect.width + 'px';
+            dropdown.style.display = 'flex';
+            trigger.classList.add('active');
+            const search = dropdown.querySelector('.searchable-select-search');
+            search.value = '';
+            filterProfileOptions(search);
+            setTimeout(() => search.focus(), 10);
+        }
+    }
+
+    function filterProfileOptions(input) {
+        const dropdown = input.closest('.searchable-select-dropdown');
+        const options = dropdown.querySelectorAll('.searchable-select-option');
+        const labels = dropdown.querySelectorAll('.searchable-select-group-label');
+        const query = input.value.toLowerCase();
+        let anyVisible = false;
+
+        // Track which groups have visible items
+        const groupVisible = {};
+
+        options.forEach(opt => {
+            const match = opt.textContent.toLowerCase().includes(query);
+            opt.classList.toggle('hidden', !match);
+            if (match) {
+                anyVisible = true;
+                groupVisible[opt.dataset.group] = true;
+            }
+        });
+
+        // Show/hide group labels based on whether they have visible children
+        labels.forEach(label => {
+            const groupName = label.textContent.toLowerCase();
+            let hasVisible = false;
+            if (groupName.includes('system')) hasVisible = groupVisible['system'];
+            else if (groupName.includes('wireguard')) hasVisible = groupVisible['wireguard'];
+            else if (groupName.includes('wifi')) hasVisible = groupVisible['wifi'];
+            label.classList.toggle('hidden', !hasVisible);
+        });
+
+        // Show/remove no-results message
+        let noResults = dropdown.querySelector('.searchable-select-no-results');
+        if (!anyVisible) {
+            if (!noResults) {
+                noResults = document.createElement('div');
+                noResults.className = 'searchable-select-no-results';
+                noResults.textContent = 'No profiles found';
+                dropdown.querySelector('.searchable-select-options').appendChild(noResults);
+            }
+        } else if (noResults) {
+            noResults.remove();
+        }
+    }
+
+    function selectProfileOption(opt) {
+        const wrapper = opt.closest('.searchable-select');
+        const hiddenInput = wrapper.closest('.profile-select-group').querySelector('input[type="hidden"]');
+        const trigger = wrapper.querySelector('.searchable-select-trigger');
+        const label = trigger.querySelector('.searchable-select-label');
+        const dropdown = wrapper.querySelector('.searchable-select-dropdown');
+
+        // Update hidden input value
+        hiddenInput.value = opt.dataset.value;
+
+        // Update trigger label
+        label.textContent = opt.textContent;
+        label.style.color = '#E0E0E0';
+
+        // Mark selected
+        wrapper.querySelectorAll('.searchable-select-option').forEach(o => o.classList.remove('selected'));
+        opt.classList.add('selected');
+
+        // Close dropdown
+        dropdown.style.display = 'none';
+        trigger.classList.remove('active');
+    }
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.searchable-select')) {
+            document.querySelectorAll('.searchable-select-dropdown').forEach(d => {
+                d.style.display = 'none';
+                d.closest('.searchable-select').querySelector('.searchable-select-trigger').classList.remove('active');
+            });
+        }
+    });
+
+    // Reposition dropdown on scroll (panel has overflow-y:auto)
+    document.addEventListener('scroll', function() {
+        document.querySelectorAll('.searchable-select-dropdown').forEach(d => {
+            if (d.style.display !== 'none') {
+                const trigger = d.closest('.searchable-select').querySelector('.searchable-select-trigger');
+                const rect = trigger.getBoundingClientRect();
+                d.style.left = rect.left + 'px';
+                d.style.top = rect.bottom + 'px';
+                d.style.width = rect.width + 'px';
+            }
+        });
+    }, true);
 
     function detectFieldType(input) {
         if (/^[a-f0-9\\-]{36}$/i.test(input)) return 'uuid';
