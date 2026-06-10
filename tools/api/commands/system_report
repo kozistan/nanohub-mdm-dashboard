@@ -1,0 +1,91 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+# NanoHUB System Report - Extended DeviceInformation
+# Usage: ./system_report <UDID>
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <UDID>"
+    exit 1
+fi
+
+UDID="$1"
+CMD_UUID=$(uuidgen)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+
+# Output UUID for API parsing
+echo "$CMD_UUID"
+
+cat > "$TEMP_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>DeviceInformation</string>
+        <key>Queries</key>
+        <array>
+            <string>UDID</string>
+            <string>DeviceName</string>
+            <string>OSVersion</string>
+            <string>BuildVersion</string>
+            <string>ModelName</string>
+            <string>Model</string>
+            <string>ProductName</string>
+            <string>SerialNumber</string>
+            <string>DeviceCapacity</string>
+            <string>AvailableDeviceCapacity</string>
+            <string>BatteryLevel</string>
+            <string>CellularTechnology</string>
+            <string>IMEI</string>
+            <string>MEID</string>
+            <string>ModemFirmwareVersion</string>
+            <string>IsSupervised</string>
+            <string>IsDeviceLocatorServiceEnabled</string>
+            <string>IsActivationLockEnabled</string>
+            <string>IsDoNotDisturbInEffect</string>
+            <string>EASDeviceIdentifier</string>
+            <string>IsCloudBackupEnabled</string>
+            <string>OSUpdateSettings</string>
+            <string>LocalHostName</string>
+            <string>HostName</string>
+            <string>SystemIntegrityProtectionEnabled</string>
+            <string>IsMDMLostModeEnabled</string>
+            <string>MaximumResidentUsers</string>
+            <string>WiFiMAC</string>
+            <string>BluetoothMAC</string>
+            <string>EthernetMAC</string>
+        </array>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
+echo "Getting system report for device: $UDID"
+echo "Command UUID: $CMD_UUID"
+
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+rm -f "$TEMP_PLIST"
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "System report command sent successfully!"
+else
+    echo "Failed to send system report command (HTTP: $HTTP_CODE)"
+    echo "Response: $BODY"
+    exit 1
+fi
+
+echo ""
+echo "[INFO] Command UUID: $CMD_UUID"
+echo "[INFO] Check webhook logs for system report details"

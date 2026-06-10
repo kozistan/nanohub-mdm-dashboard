@@ -1172,6 +1172,19 @@ def admin_command(cmd_id):
             ddm_sets = db.query_all("SELECT name FROM ddm_sets ORDER BY name")
             param['options'] = [{'value': '', 'label': '-- Select DDM Set --'}]
             param['options'].extend([{'value': s['name'], 'label': s['name']} for s in ddm_sets])
+        # Populate app_select for install_application from required_applications (deduplicated by manifest_url)
+        if cmd_id == 'install_application' and param.get('name') == 'app_select' and param.get('type') == 'select':
+            apps = db.query_all("""
+                SELECT MIN(app_name) AS app_name, manifest_url,
+                       GROUP_CONCAT(DISTINCT os ORDER BY os) AS os_list
+                FROM required_applications
+                GROUP BY manifest_url
+                ORDER BY app_name
+            """)
+            param['options'] = [{'value': '', 'label': '-- Select existing app or use Custom URL below --'}]
+            for app in apps or []:
+                label = f"{app['app_name']} ({app['os_list']})"
+                param['options'].append({'value': app['manifest_url'], 'label': label})
     profiles = get_profiles_by_category()
 
     # Check if command has 'devices' type parameter (multi-select)

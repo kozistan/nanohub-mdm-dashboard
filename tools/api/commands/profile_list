@@ -1,0 +1,72 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+# NanoHUB ProfileList - Get list of installed profiles
+# Usage: ./profile_list <UDID>
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <UDID>"
+    exit 1
+fi
+
+UDID="$1"
+CMD_UUID=$(uuidgen)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+
+cat > "$TEMP_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>ProfileList</string>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
+echo "Getting profile list for device: $UDID"
+echo "Command UUID: $CMD_UUID"
+
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+rm -f "$TEMP_PLIST"
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "ProfileList command sent, waiting for device response..."
+
+    # Poll webhook log for response (max 15 seconds)
+    WEBHOOK_LOG="/var/log/nanohub/webhook.log"
+    for i in {1..15}; do
+        sleep 1
+        # Check if our command UUID appears in the log
+        if grep -q "command_uuid: $CMD_UUID" "$WEBHOOK_LOG" 2>/dev/null; then
+            # Get line number where our UUID appears
+            LINE_NUM=$(grep -n "command_uuid: $CMD_UUID" "$WEBHOOK_LOG" | tail -1 | cut -d: -f1)
+            if [ -n "$LINE_NUM" ]; then
+                # Extract ProfileList output that follows
+                tail -n +$LINE_NUM "$WEBHOOK_LOG" | head -50 | grep -E "\[ProfileList\]|\[INFO\].*\[[0-9]+\]" | head -30
+                exit 0
+            fi
+        fi
+    done
+
+    echo ""
+    echo "Timeout waiting for device response (15s)."
+    echo "Device may be offline or sleeping."
+    exit 1
+else
+    echo "Failed to send ProfileList command (HTTP: $HTTP_CODE)"
+    echo "Response: $BODY"
+    exit 1
+fi

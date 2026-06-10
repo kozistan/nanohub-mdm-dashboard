@@ -42,12 +42,12 @@ def get_api_credentials():
 def upload_declaration_to_kmfddm(identifier: str, decl_type: str, payload: dict) -> tuple:
     """
     Upload declaration to KMFDDM server.
-    Returns (success: bool, error: str or None)
+    Returns (success: bool, error: str or None, server_token: str or None)
     """
     try:
         nanohub_url, api_key = get_api_credentials()
         if not api_key:
-            return False, 'API key not configured'
+            return False, 'API key not configured', None
 
         # Build full declaration payload for KMFDDM
         full_payload = {
@@ -70,15 +70,42 @@ def upload_declaration_to_kmfddm(identifier: str, decl_type: str, payload: dict)
         with urllib.request.urlopen(req, timeout=30) as resp:
             resp.read()
 
-        return True, None
+        # Fetch ServerToken via GET (PUT returns 204 No Content)
+        server_token = fetch_server_token_from_kmfddm(identifier)
+
+        return True, None, server_token
     except urllib.error.HTTPError as e:
+        if e.code == 304:
+            # 304 Not Modified = declaration unchanged, still a success
+            server_token = fetch_server_token_from_kmfddm(identifier)
+            return True, None, server_token
         error_body = e.read().decode() if e.fp else str(e)
         logger.error(f"Failed to upload declaration to KMFDDM: {e} - {error_body}")
-        return False, f'KMFDDM error: {error_body}'
+        return False, f'KMFDDM error: {error_body}', None
     except Exception as e:
         logger.error(f"Failed to upload declaration to KMFDDM: {e}")
-        return False, str(e)
+        return False, str(e), None
 
+
+
+def fetch_server_token_from_kmfddm(identifier: str):
+    """Fetch ServerToken for a declaration from KMFDDM API via GET."""
+    try:
+        nanohub_url, api_key = get_api_credentials()
+        if not api_key:
+            return None
+        auth_string = base64.b64encode(f"nanohub:{api_key}".encode()).decode()
+        req = urllib.request.Request(
+            f"{nanohub_url}/api/v1/ddm/declarations/{identifier}",
+            headers={"Authorization": f"Basic {auth_string}"},
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+            return data.get("ServerToken")
+    except Exception as e:
+        logger.warning(f"Failed to fetch ServerToken for {identifier}: {e}")
+        return None
 
 def delete_declaration_from_kmfddm(identifier: str) -> tuple:
     """
@@ -207,6 +234,31 @@ def get_set_declarations_from_kmfddm(set_name: str) -> list:
             return data if isinstance(data, list) else []
     except:
         return []
+
+
+
+
+def save_declaration_to_json(identifier: str, decl_type: str, payload: dict):
+    """Save declaration to local JSON file for CLI script compatibility."""
+    ddm_dir = "/opt/nanohub/ddm/declarations"
+    os.makedirs(ddm_dir, exist_ok=True)
+    json_path = os.path.join(ddm_dir, f"{identifier}.json")
+    full_decl = {
+        "Type": decl_type,
+        "Identifier": identifier,
+        "Payload": payload
+    }
+    with open(json_path, "w") as f:
+        json.dump(full_decl, f, indent=4)
+    logger.info(f"Saved declaration to {json_path}")
+
+
+def delete_declaration_json(identifier: str):
+    """Delete local JSON file for a declaration."""
+    json_path = os.path.join("/opt/nanohub/ddm/declarations", f"{identifier}.json")
+    if os.path.exists(json_path):
+        os.remove(json_path)
+        logger.info(f"Deleted {json_path}")
 
 
 # =============================================================================
@@ -992,13 +1044,16 @@ def api_ddm_declarations_create():
         """, (identifier, decl_type, payload_str))
 
         # Auto-upload to KMFDDM server
-        success, error = upload_declaration_to_kmfddm(identifier, decl_type, payload_dict)
+        success, error, server_token = upload_declaration_to_kmfddm(identifier, decl_type, payload_dict)
         if not success:
             logger.warning(f"Declaration saved to DB but KMFDDM upload failed: {error}")
             return jsonify({'success': True, 'warning': f'Saved locally but KMFDDM upload failed: {error}'})
 
-        # Mark as uploaded
-        db.execute("UPDATE ddm_declarations SET uploaded_at = NOW() WHERE identifier = %s", (identifier,))
+        # Mark as uploaded + save server_token
+        db.execute("UPDATE ddm_declarations SET uploaded_at = NOW(), server_token = %s WHERE identifier = %s", (server_token, identifier))
+
+        # Sync to local JSON file
+        save_declaration_to_json(identifier, decl_type, payload_dict)
 
         return jsonify({'success': True})
     except Exception as e:
@@ -1026,6 +1081,9 @@ def api_ddm_declarations_delete(decl_id):
         # Delete from local DB
         db.execute("DELETE FROM ddm_declarations WHERE id = %s", (decl_id,))
 
+        # Remove local JSON file
+        delete_declaration_json(identifier)
+
         return jsonify({'success': True})
     except Exception as e:
         logger.error(f"Failed to delete DDM declaration: {e}")
@@ -1045,32 +1103,15 @@ def api_ddm_declarations_upload(decl_id):
         if isinstance(payload, str):
             payload = json.loads(payload)
 
-        nanohub_url, api_key = get_api_credentials()
-        if not api_key:
-            return jsonify({'success': False, 'error': 'API key not configured'})
+        # Use shared upload function (builds correct {Type,Identifier,Payload} wrapper)
+        success, error, server_token = upload_declaration_to_kmfddm(row['identifier'], row['type'], payload)
+        if not success:
+            return jsonify({'success': False, 'error': f'KMFDDM upload failed: {error}'})
 
-        auth_string = base64.b64encode(f"nanohub:{api_key}".encode()).decode()
-        req = urllib.request.Request(
-            f"{nanohub_url}/api/v1/ddm/declarations",
-            data=json.dumps(payload).encode(),
-            headers={
-                'Authorization': f'Basic {auth_string}',
-                'Content-Type': 'application/json'
-            },
-            method='PUT'
-        )
-
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = resp.read().decode()
-
-        # Mark as uploaded
-        db.execute("UPDATE ddm_declarations SET uploaded_at = NOW() WHERE id = %s", (decl_id,))
+        # Mark as uploaded + save server_token
+        db.execute("UPDATE ddm_declarations SET uploaded_at = NOW(), server_token = %s WHERE id = %s", (server_token, decl_id))
 
         return jsonify({'success': True})
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode() if e.fp else str(e)
-        logger.error(f"Failed to upload declaration: {e} - {error_body}")
-        return jsonify({'success': False, 'error': f'Server error: {error_body}'})
     except Exception as e:
         logger.error(f"Failed to upload DDM declaration: {e}")
         return jsonify({'success': False, 'error': str(e)})
@@ -1131,9 +1172,9 @@ def api_ddm_declarations_import():
                 """, (identifier, decl_type, json.dumps(inner_payload)))
 
                 # Auto-upload to KMFDDM server
-                success, error = upload_declaration_to_kmfddm(identifier, decl_type, inner_payload)
+                success, error, server_token = upload_declaration_to_kmfddm(identifier, decl_type, inner_payload)
                 if success:
-                    db.execute("UPDATE ddm_declarations SET uploaded_at = NOW() WHERE identifier = %s", (identifier,))
+                    db.execute("UPDATE ddm_declarations SET uploaded_at = NOW(), server_token = %s WHERE identifier = %s", (server_token, identifier))
                 else:
                     upload_errors.append(f"{identifier}: {error}")
 

@@ -1,0 +1,85 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+# NanoHUB Installed Application List - podle oficiální NanoMDM dokumentace
+# Usage: ./installed_application_list.sh <UDID>
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <UDID>"
+    echo "Example: $0 00008020-0001713C1E90003A"
+    exit 1
+fi
+
+UDID="$1"
+
+echo "[INFO] Getting installed applications for device: $UDID"
+
+# Generate command UUID
+CMD_UUID=$(uuidgen)
+
+# Create InstalledApplicationList command (unique temp file for parallel execution)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+cat > "$TEMP_PLIST" << 'PLIST_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>InstalledApplicationList</string>
+    </dict>
+    <key>CommandUUID</key>
+    <string>CMD_UUID_PLACEHOLDER</string>
+</dict>
+</plist>
+PLIST_EOF
+
+# Replace placeholder with actual UUID
+sed -i "s/CMD_UUID_PLACEHOLDER/$CMD_UUID/g" "$TEMP_PLIST"
+
+echo "[INFO] Sending InstalledApplicationList command..."
+echo "Command UUID: $CMD_UUID"
+
+# Send command via NanoMDM API
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+# Extract HTTP code and response body
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+# Cleanup temp file
+rm -f "$TEMP_PLIST"
+
+# Check response
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "[OK] InstalledApplicationList command sent successfully!"
+    if [ -n "$BODY" ] && [ "$BODY" != "{}" ]; then
+        echo "Response: $BODY"
+    fi
+    echo ""
+    echo "[INFO] Device will report installed applications..."
+    echo "[INFO] Results will appear in webhook logs within 30 seconds"
+    echo ""
+    echo "Monitor with:"
+    echo "  tail -f /var/log/nanohub/webhook.log | grep -E \"(InstalledApplicationList|$CMD_UUID)\""
+    echo ""
+    echo "Expected response includes:"
+    echo "  - List of all installed apps"
+    echo "  - Bundle IDs and versions"
+    echo "  - App names and sizes"
+    echo "  - Installation sources (App Store, MDM, etc.)"
+else
+    echo "[ERROR] Failed to send InstalledApplicationList command (HTTP: $HTTP_CODE)"
+    if [ -n "$BODY" ]; then
+        echo "Error response: $BODY"
+    fi
+    exit 1
+fi
+
+echo ""
+echo "[INFO] Command UUID: $CMD_UUID"
+echo "[INFO] Check webhook logs for complete application list"

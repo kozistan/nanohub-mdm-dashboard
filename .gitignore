@@ -1,80 +1,33 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
+# Runtime / secrets — NIKDY do gitu
 venv/
-env/
-ENV/
-.venv
-
-# Flask
-instance/
-.webassets-cache
-
-# Environment files with secrets
-mdm_flask_api_environment
-*.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-logs/
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Temporary files
-/tmp/
-*.tmp
+__pycache__/
+*.pyc
 *.bak
-*.backup
-*.plist
-
-# Credentials and keys
-*_credentials.json
-*_api_key.txt
-*.pem
-*.key
-*.crt
-nanohub_environment
-environment.sh
-*.env
-
-# Device data
-devices.json
-webhook.log
-
-# Config files with sensitive data
-# Note: config.py is now sanitized (uses CHANGE_ME placeholders)
-# Note: settings.py in routes/ is part of the application
-/settings.py
-
-# Backup files
+*.bak.*
+*.bak_*
+*.backup_*
 backups/
-backup_theme_*/
-
-# Claude Code project file (local only)
-CLAUDE.md
-CLAUDE.local.md
-.claude/
+# secrety
+environment.sh
+environment.sh.*
+web_environment.sh
+*_environment
+*.env
+secrets/
+certs/
+dep/
+scep-docker/
+*.key
+*.p7m
+decrypted_*
+*token*.json
+DEPOAuthToken*
+# runtime data
+data/
+profiles/
+var/run/
+*.db
+nanohub.db
+git-repo/
+.old
+*.old

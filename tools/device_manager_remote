@@ -1,0 +1,636 @@
+#!/bin/bash
+#
+# NanoHUB Device Manager - Remote API Version
+#
+# Description:
+# Standalone device manager that uses HTTPS API instead of direct MySQL
+# No environment.sh required - all configuration embedded
+#
+# Usage:
+#   ./device_manager_remote <command> [options]
+#
+# Commands:
+#   search <term>                     - Search by hostname, serial, UUID, or OS
+#   get <field> <value>               - Get device by specific field
+#   list [os]                         - List all devices or filter by OS
+#   count [os]                        - Count devices (all or by OS)
+#   export                            - Export all devices as JSON
+#
+# Note: All CRUD operations supported via API
+#
+
+# Configuration
+API_BASE_URL="https://nanohub.sloto.space/api"
+CURL_OPTS="-s -k"  # -s silent, -k insecure (skip SSL verification if needed)
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Helper functions
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+# Check if jq is available
+if ! command -v jq &> /dev/null; then
+    print_error "'jq' is required but not installed. Install with: apt install jq"
+    exit 1
+fi
+
+# API call wrapper
+api_call() {
+    local endpoint="$1"
+    local method="${2:-GET}"
+    local data="$3"
+
+    local url="${API_BASE_URL}${endpoint}"
+
+    case "$method" in
+        GET)
+            curl $CURL_OPTS "$url"
+            ;;
+        POST)
+            curl $CURL_OPTS -X POST "$url" \
+                -H "Content-Type: application/json" \
+                -d "$data"
+            ;;
+        PUT)
+            curl $CURL_OPTS -X PUT "$url" \
+                -H "Content-Type: application/json" \
+                -d "$data"
+            ;;
+        DELETE)
+            curl $CURL_OPTS -X DELETE "$url"
+            ;;
+        *)
+            echo "Unsupported HTTP method: $method" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Get all devices from API
+get_all_devices() {
+    api_call "/devices.json"
+}
+
+# Display help
+show_help() {
+    cat <<EOF
+NanoHUB Device Manager - Remote API Version
+
+Usage: $0 <command> [options]
+
+Commands:
+  search <term>                 - Search devices by hostname, serial, UUID, or OS
+  get hostname <hostname>       - Get device by hostname
+  get serial <serial>          - Get device by serial number
+  get uuid <uuid>              - Get device by UUID
+  get os <os>                  - Get all devices by OS (ios/macos)
+
+  add                          - Add a new device (interactive)
+  update <uuid>                - Update device by UUID (interactive)
+  delete <uuid>                - Delete device by UUID
+
+  list [ios|macos]             - List all devices or filter by OS
+  count [ios|macos]            - Count total devices or by OS
+
+  export                       - Export all devices as JSON
+  stats                        - Show device statistics
+
+Examples:
+  $0 search sloto01
+  $0 get hostname sloto01
+  $0 get serial FVFKQ0LW1WG7
+  $0 add
+  $0 update 12345678-1234-1234-1234-123456789012
+  $0 delete 12345678-1234-1234-1234-123456789012
+  $0 list ios
+  $0 count
+  $0 export > devices_backup.json
+
+API Endpoint: ${API_BASE_URL}
+
+EOF
+    exit 0
+}
+
+# Search devices
+search_devices() {
+    local search_term="$1"
+
+    if [[ -z "$search_term" ]]; then
+        print_error "Search term required"
+        exit 1
+    fi
+
+    print_info "Searching for: $search_term"
+
+    local all_devices=$(get_all_devices)
+
+    if [[ -z "$all_devices" ]]; then
+        print_error "Failed to fetch devices from API"
+        exit 1
+    fi
+
+    # Search in JSON using jq
+    echo "$all_devices" | jq --arg term "$search_term" '[
+        .[] | select(
+            (.hostname | ascii_downcase | contains($term | ascii_downcase)) or
+            (.serial | ascii_downcase | contains($term | ascii_downcase)) or
+            (.uuid | ascii_downcase | contains($term | ascii_downcase)) or
+            (.os | ascii_downcase | contains($term | ascii_downcase))
+        )
+    ]' | jq -r '
+        (["UUID", "SERIAL", "OS", "HOSTNAME", "MANIFEST", "ACCOUNT", "DEP"] | @tsv),
+        (.[] | [.uuid, .serial, .os, .hostname, .manifest, .account, .dep] | @tsv)
+    ' | column -t -s $'\t'
+}
+
+# Get device by specific field
+get_device() {
+    local field="$1"
+    local value="$2"
+
+    if [[ -z "$field" || -z "$value" ]]; then
+        print_error "Field and value required"
+        exit 1
+    fi
+
+    # Validate field
+    case "$field" in
+        hostname|serial|uuid|os|manifest) ;;
+        *) print_error "Invalid field: $field"; exit 1 ;;
+    esac
+
+    print_info "Getting device by $field: $value"
+
+    local all_devices=$(get_all_devices)
+
+    if [[ -z "$all_devices" ]]; then
+        print_error "Failed to fetch devices from API"
+        exit 1
+    fi
+
+    # Filter using jq
+    echo "$all_devices" | jq --arg field "$field" --arg value "$value" '[
+        .[] | select(.[$field] == $value)
+    ]' | jq -r '
+        (["UUID", "SERIAL", "OS", "HOSTNAME", "MANIFEST", "ACCOUNT", "DEP"] | @tsv),
+        (.[] | [.uuid, .serial, .os, .hostname, .manifest, .account, .dep] | @tsv)
+    ' | column -t -s $'\t'
+}
+
+# List devices
+list_devices() {
+    local os_filter="$1"
+
+    if [[ -n "$os_filter" ]]; then
+        if [[ "$os_filter" != "ios" && "$os_filter" != "macos" ]]; then
+            print_error "OS filter must be 'ios' or 'macos'"
+            exit 1
+        fi
+        print_info "Listing $os_filter devices"
+    else
+        print_info "Listing all devices"
+    fi
+
+    local all_devices=$(get_all_devices)
+
+    if [[ -z "$all_devices" ]]; then
+        print_error "Failed to fetch devices from API"
+        exit 1
+    fi
+
+    if [[ -n "$os_filter" ]]; then
+        echo "$all_devices" | jq --arg os "$os_filter" '[.[] | select(.os == $os)]' | jq -r '
+            (["UUID", "SERIAL", "OS", "HOSTNAME", "MANIFEST", "ACCOUNT", "DEP"] | @tsv),
+            (.[] | [.uuid, .serial, .os, .hostname, .manifest, .account, .dep] | @tsv)
+        ' | column -t -s $'\t'
+    else
+        echo "$all_devices" | jq -r '
+            (["UUID", "SERIAL", "OS", "HOSTNAME", "MANIFEST", "ACCOUNT", "DEP"] | @tsv),
+            (.[] | [.uuid, .serial, .os, .hostname, .manifest, .account, .dep] | @tsv)
+        ' | column -t -s $'\t'
+    fi
+}
+
+# Count devices
+count_devices() {
+    local os_filter="$1"
+
+    local all_devices=$(get_all_devices)
+
+    if [[ -z "$all_devices" ]]; then
+        print_error "Failed to fetch devices from API"
+        exit 1
+    fi
+
+    if [[ -n "$os_filter" ]]; then
+        if [[ "$os_filter" != "ios" && "$os_filter" != "macos" ]]; then
+            print_error "OS filter must be 'ios' or 'macos'"
+            exit 1
+        fi
+        local count=$(echo "$all_devices" | jq --arg os "$os_filter" '[.[] | select(.os == $os)] | length')
+        echo "$os_filter devices: $count"
+    else
+        local total=$(echo "$all_devices" | jq 'length')
+        local ios_count=$(echo "$all_devices" | jq '[.[] | select(.os == "ios")] | length')
+        local macos_count=$(echo "$all_devices" | jq '[.[] | select(.os == "macos")] | length')
+
+        echo "Total devices: $total"
+        echo "  iOS:   $ios_count"
+        echo "  macOS: $macos_count"
+    fi
+}
+
+# Export devices as JSON
+export_devices() {
+    print_info "Exporting all devices as JSON" >&2
+
+    local all_devices=$(get_all_devices)
+
+    if [[ -z "$all_devices" ]]; then
+        print_error "Failed to fetch devices from API"
+        exit 1
+    fi
+
+    echo "$all_devices" | jq '.'
+}
+
+# Show statistics
+show_stats() {
+    echo ""
+    echo "=== Device Inventory Statistics ==="
+    echo ""
+
+    local all_devices=$(get_all_devices)
+
+    if [[ -z "$all_devices" ]]; then
+        print_error "Failed to fetch devices from API"
+        exit 1
+    fi
+
+    local total=$(echo "$all_devices" | jq 'length')
+    local ios_count=$(echo "$all_devices" | jq '[.[] | select(.os == "ios")] | length')
+    local macos_count=$(echo "$all_devices" | jq '[.[] | select(.os == "macos")] | length')
+    local default_manifest=$(echo "$all_devices" | jq '[.[] | select(.manifest == "default")] | length')
+    local tech_manifest=$(echo "$all_devices" | jq '[.[] | select(.manifest == "tech")] | length')
+
+    echo "Total Devices: $total"
+    echo "iOS: $ios_count"
+    echo "macOS: $macos_count"
+    echo ""
+    echo "Manifests:"
+    echo "  default: $default_manifest"
+    echo "  tech: $tech_manifest"
+    echo ""
+
+    # Most common manifests
+    echo "Device breakdown by manifest:"
+    echo "$all_devices" | jq -r '
+        group_by(.manifest) |
+        map({manifest: .[0].manifest, count: length}) |
+        .[] |
+        "  \(.manifest): \(.count)"
+    '
+}
+
+# Test API connection
+test_connection() {
+    print_info "Testing API connection to ${API_BASE_URL}..."
+
+    local response=$(api_call "/devices.json")
+
+    if [[ -z "$response" ]]; then
+        print_error "Failed to connect to API"
+        print_error "URL: ${API_BASE_URL}/devices.json"
+        print_error "Check: 1) Network connectivity  2) API is running  3) URL is correct"
+        exit 1
+    fi
+
+    local device_count=$(echo "$response" | jq 'length' 2>/dev/null)
+
+    if [[ -z "$device_count" ]]; then
+        print_error "API returned invalid JSON"
+        exit 1
+    fi
+
+    print_success "API connection OK - Found $device_count devices"
+}
+
+# Add a new device (interactive)
+add_device() {
+    echo ""
+    echo "=== Add New Device ==="
+    echo ""
+
+    # Collect required fields
+    read -p "UUID: " uuid
+    read -p "Serial Number: " serial
+    read -p "OS (ios/macos): " os
+    read -p "Hostname: " hostname
+
+    # Validate required fields
+    if [[ -z "$uuid" || -z "$serial" || -z "$os" || -z "$hostname" ]]; then
+        print_error "All fields (UUID, Serial, OS, Hostname) are required"
+        exit 1
+    fi
+
+    # Validate OS
+    if [[ "$os" != "ios" && "$os" != "macos" ]]; then
+        print_error "OS must be 'ios' or 'macos'"
+        exit 1
+    fi
+
+    # Optional fields (with defaults)
+    read -p "Manifest [default]: " manifest
+    manifest="${manifest:-default}"
+
+    read -p "Account [disabled]: " account
+    account="${account:-disabled}"
+
+    read -p "DEP [enabled]: " dep
+    dep="${dep:-enabled}"
+
+    # Build JSON payload
+    local json_data=$(jq -n \
+        --arg uuid "$uuid" \
+        --arg serial "$serial" \
+        --arg os "$os" \
+        --arg hostname "$hostname" \
+        --arg manifest "$manifest" \
+        --arg account "$account" \
+        --arg dep "$dep" \
+        '{
+            uuid: $uuid,
+            serial: $serial,
+            os: $os,
+            hostname: $hostname,
+            manifest: $manifest,
+            account: $account,
+            dep: $dep
+        }')
+
+    print_info "Adding device..."
+
+    local response=$(api_call "/devices" "POST" "$json_data")
+    local status=$?
+
+    # Check if response contains error
+    if echo "$response" | jq -e '.error' >/dev/null 2>&1; then
+        local error_msg=$(echo "$response" | jq -r '.error')
+        print_error "API Error: $error_msg"
+        exit 1
+    elif echo "$response" | jq -e '.message' >/dev/null 2>&1; then
+        local success_msg=$(echo "$response" | jq -r '.message')
+        print_success "$success_msg"
+        echo ""
+        echo "Device added:"
+        echo "  UUID:     $uuid"
+        echo "  Serial:   $serial"
+        echo "  OS:       $os"
+        echo "  Hostname: $hostname"
+        echo "  Manifest: $manifest"
+        echo "  Account:  $account"
+        echo "  DEP:      $dep"
+    else
+        print_error "Unexpected API response"
+        echo "$response"
+        exit 1
+    fi
+}
+
+# Update an existing device (interactive)
+update_device() {
+    local uuid="$1"
+
+    if [[ -z "$uuid" ]]; then
+        print_error "UUID required for update"
+        exit 1
+    fi
+
+    # Check if device exists
+    print_info "Checking if device exists..."
+    local all_devices=$(get_all_devices)
+    local device=$(echo "$all_devices" | jq --arg uuid "$uuid" '.[] | select(.uuid == $uuid)')
+
+    if [[ -z "$device" ]]; then
+        print_error "Device with UUID $uuid not found"
+        exit 1
+    fi
+
+    # Display current values
+    echo ""
+    echo "=== Update Device ==="
+    echo ""
+    echo "Current values:"
+    echo "$device" | jq -r '
+        "  UUID:     \(.uuid)",
+        "  Serial:   \(.serial)",
+        "  OS:       \(.os)",
+        "  Hostname: \(.hostname)",
+        "  Manifest: \(.manifest)",
+        "  Account:  \(.account)",
+        "  DEP:      \(.dep)"
+    '
+    echo ""
+    echo "Enter new values (press Enter to keep current value):"
+    echo ""
+
+    # Collect updates (optional)
+    read -p "Serial [$(echo "$device" | jq -r '.serial')]: " serial
+    read -p "OS (ios/macos) [$(echo "$device" | jq -r '.os')]: " os
+    read -p "Hostname [$(echo "$device" | jq -r '.hostname')]: " hostname
+    read -p "Manifest [$(echo "$device" | jq -r '.manifest')]: " manifest
+    read -p "Account [$(echo "$device" | jq -r '.account')]: " account
+    read -p "DEP [$(echo "$device" | jq -r '.dep')]: " dep
+
+    # Build JSON with only provided fields
+    local json_data="{"
+    local has_fields=false
+
+    if [[ -n "$serial" ]]; then
+        json_data+="\"serial\":\"$serial\","
+        has_fields=true
+    fi
+    if [[ -n "$os" ]]; then
+        if [[ "$os" != "ios" && "$os" != "macos" ]]; then
+            print_error "OS must be 'ios' or 'macos'"
+            exit 1
+        fi
+        json_data+="\"os\":\"$os\","
+        has_fields=true
+    fi
+    if [[ -n "$hostname" ]]; then
+        json_data+="\"hostname\":\"$hostname\","
+        has_fields=true
+    fi
+    if [[ -n "$manifest" ]]; then
+        json_data+="\"manifest\":\"$manifest\","
+        has_fields=true
+    fi
+    if [[ -n "$account" ]]; then
+        json_data+="\"account\":\"$account\","
+        has_fields=true
+    fi
+    if [[ -n "$dep" ]]; then
+        json_data+="\"dep\":\"$dep\","
+        has_fields=true
+    fi
+
+    if [[ "$has_fields" == false ]]; then
+        print_warning "No changes provided"
+        exit 0
+    fi
+
+    # Remove trailing comma and close JSON
+    json_data="${json_data%,}}"
+
+    print_info "Updating device..."
+
+    local response=$(api_call "/devices/$uuid" "PUT" "$json_data")
+
+    # Check if response contains error
+    if echo "$response" | jq -e '.error' >/dev/null 2>&1; then
+        local error_msg=$(echo "$response" | jq -r '.error')
+        print_error "API Error: $error_msg"
+        exit 1
+    elif echo "$response" | jq -e '.message' >/dev/null 2>&1; then
+        local success_msg=$(echo "$response" | jq -r '.message')
+        print_success "$success_msg"
+    else
+        print_error "Unexpected API response"
+        echo "$response"
+        exit 1
+    fi
+}
+
+# Delete a device
+delete_device() {
+    local uuid="$1"
+
+    if [[ -z "$uuid" ]]; then
+        print_error "UUID required for delete"
+        exit 1
+    fi
+
+    # Check if device exists
+    print_info "Checking if device exists..."
+    local all_devices=$(get_all_devices)
+    local device=$(echo "$all_devices" | jq --arg uuid "$uuid" '.[] | select(.uuid == $uuid)')
+
+    if [[ -z "$device" ]]; then
+        print_error "Device with UUID $uuid not found"
+        exit 1
+    fi
+
+    local hostname=$(echo "$device" | jq -r '.hostname')
+
+    # Confirm deletion
+    echo ""
+    echo "=== Delete Device ==="
+    echo ""
+    echo "Device to delete:"
+    echo "$device" | jq -r '
+        "  UUID:     \(.uuid)",
+        "  Serial:   \(.serial)",
+        "  OS:       \(.os)",
+        "  Hostname: \(.hostname)"
+    '
+    echo ""
+    read -p "Are you sure you want to delete this device? (yes/no): " confirm
+
+    if [[ "$confirm" != "yes" ]]; then
+        print_info "Delete cancelled"
+        exit 0
+    fi
+
+    print_info "Deleting device..."
+
+    local response=$(api_call "/devices/$uuid" "DELETE")
+
+    # Check if response contains error
+    if echo "$response" | jq -e '.error' >/dev/null 2>&1; then
+        local error_msg=$(echo "$response" | jq -r '.error')
+        print_error "API Error: $error_msg"
+        exit 1
+    elif echo "$response" | jq -e '.message' >/dev/null 2>&1; then
+        local success_msg=$(echo "$response" | jq -r '.message')
+        print_success "$success_msg"
+    else
+        print_error "Unexpected API response"
+        echo "$response"
+        exit 1
+    fi
+}
+
+# Main command dispatcher
+if [[ $# -eq 0 ]]; then
+    show_help
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+    search)
+        search_devices "$@"
+        ;;
+    get)
+        get_device "$@"
+        ;;
+    add)
+        add_device
+        ;;
+    update)
+        update_device "$@"
+        ;;
+    delete)
+        delete_device "$@"
+        ;;
+    list)
+        list_devices "$@"
+        ;;
+    count)
+        count_devices "$@"
+        ;;
+    export)
+        export_devices
+        ;;
+    stats)
+        show_stats
+        ;;
+    test)
+        test_connection
+        ;;
+    -h|--help|help)
+        show_help
+        ;;
+    import)
+        print_error "Import command is not available in remote mode"
+        print_error "Import requires direct database access - use the local 'device_manager' script"
+        exit 1
+        ;;
+    *)
+        print_error "Unknown command: $COMMAND"
+        echo ""
+        show_help
+        ;;
+esac

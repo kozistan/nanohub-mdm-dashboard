@@ -1,0 +1,122 @@
+#!/bin/bash
+# NanoHUB Sign Profile - podle MicroMDM scriptu
+# Usage: ./sign_profile.sh <path_to_profile.mobileconfig>
+
+# Check argument
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 /path/to/profile.mobileconfig"
+    echo "Example: $0 /home/microm/nanohub/profiles/wifi-corporate.mobileconfig"
+    exit 1
+fi
+
+INPUT_PROFILE="$1"
+
+# Verify input file exists
+if [ ! -f "$INPUT_PROFILE" ]; then
+    echo "[ERROR] File '$INPUT_PROFILE' not found."
+    exit 1
+fi
+
+# Paths to key and certificate - UPDATED for NanoHUB
+KEY_PATH="/home/microm/nanohub/certs/VendorPrivateKey.key"
+CERT_PATH="/home/microm/nanohub/certs/mdm_cert_clean.pem"
+KEY_PASSWORD="${MDM_CERT_PASSWORD}"
+
+# Verify certificate files exist
+if [ ! -f "$KEY_PATH" ]; then
+    echo "[ERROR] Private key not found: $KEY_PATH"
+    echo "Available certificates:"
+    ls -la /home/microm/nanohub/certs/
+    exit 1
+fi
+
+if [ ! -f "$CERT_PATH" ]; then
+    echo "[ERROR] Certificate not found: $CERT_PATH"
+    echo "Available certificates:"
+    ls -la /home/microm/nanohub/certs/
+    exit 1
+fi
+
+# Output path (same directory, .signed.mobileconfig suffix)
+BASENAME="$(basename "$INPUT_PROFILE" .mobileconfig)"
+DIRNAME="$(dirname "$INPUT_PROFILE")"
+OUTPUT_PROFILE="$DIRNAME/${BASENAME}.signed.mobileconfig"
+
+echo "[INFO] Signing profile '$INPUT_PROFILE'..."
+echo "Private key: $KEY_PATH"
+echo "Certificate: $CERT_PATH"
+echo "Output: $OUTPUT_PROFILE"
+
+# Check if mdmctl is available
+if ! command -v mdmctl >/dev/null 2>&1; then
+    echo "[ERROR] mdmctl not found!"
+    echo "Install mdmctl: go install github.com/micromdm/micromdm/cmd/mdmctl@latest"
+    echo "Or use openssl alternative for signing"
+    exit 1
+fi
+
+# Sign the profile using mdmctl
+echo ""
+echo "[INFO] Signing profile with mdmctl..."
+mdmctl apply profiles \
+    -f "$INPUT_PROFILE" \
+    -private-key "$KEY_PATH" \
+    -cert "$CERT_PATH" \
+    -password="$KEY_PASSWORD" \
+    -sign \
+    -out "$OUTPUT_PROFILE"
+
+RESULT=$?
+
+# Check result
+if [ $RESULT -eq 0 ]; then
+    echo ""
+    echo "[OK] Signed profile saved to: $OUTPUT_PROFILE"
+
+    # Also copy to /opt/nanohub/profiles/ with same relative path
+    SOURCE_BASE="/home/microm/nanohub/profiles"
+    DEST_BASE="/opt/nanohub/profiles"
+
+    # Check if input is under source base
+    if [[ "$INPUT_PROFILE" == "$SOURCE_BASE"/* ]]; then
+        # Get relative path from source base
+        RELATIVE_PATH="${INPUT_PROFILE#$SOURCE_BASE/}"
+        RELATIVE_DIR="$(dirname "$RELATIVE_PATH")"
+        SIGNED_FILENAME="${BASENAME}.signed.mobileconfig"
+
+        # Create destination directory if needed
+        DEST_DIR="$DEST_BASE/$RELATIVE_DIR"
+        mkdir -p "$DEST_DIR"
+
+        # Copy signed profile to destination
+        DEST_FILE="$DEST_DIR/$SIGNED_FILENAME"
+        cp "$OUTPUT_PROFILE" "$DEST_FILE"
+
+        if [ $? -eq 0 ]; then
+            echo "[OK] Also copied to: $DEST_FILE"
+        else
+            echo "[WARN] Failed to copy to: $DEST_FILE"
+        fi
+    fi
+
+    echo ""
+    echo "Profile information:"
+    echo "  Input size:  $(du -h "$INPUT_PROFILE" | cut -f1)"
+    echo "  Output size: $(du -h "$OUTPUT_PROFILE" | cut -f1)"
+    echo ""
+    echo "You can now install the signed profile:"
+    echo "  ./install_profile.sh <UDID> $OUTPUT_PROFILE"
+    echo ""
+    echo "Or upload to web server:"
+    echo "  cp $OUTPUT_PROFILE /var/www/mdm/profiles/"
+else
+    echo ""
+    echo "[ERROR] Signing failed with exit code: $RESULT"
+    echo ""
+    echo "Common issues:"
+    echo "  - Incorrect password for private key"
+    echo "  - Certificate/key file permissions"
+    echo "  - Invalid input mobileconfig format"
+    echo "  - mdmctl version compatibility"
+    exit 2
+fi

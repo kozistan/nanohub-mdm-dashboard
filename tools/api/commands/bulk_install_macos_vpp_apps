@@ -1,0 +1,151 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+# Bulk install VPP apps listed in apps.json - NanoHUB version
+# Requires: apps.json with format {"apps": [ { "adamId", "bundleId", "name" }, ... ]}
+# Prompts for UDID and SerialNumber
+set -euo pipefail
+
+read -p "Enter device UDID: " UDID
+read -p "Enter device serial number: " SERIAL
+
+APPS_JSON="/home/microm/nanohub/data/apps_macos.json"
+
+if [[ ! -f "$APPS_JSON" ]]; then
+    echo "[ERROR] $APPS_JSON not found."
+    echo "Please create the file with format:"
+    echo '{"apps": [{"adamId": "422689480", "bundleId": "com.google.Gmail", "name": "Gmail"}]}'
+    exit 1
+fi
+
+# VPP Token - check environment or config
+if [[ -z "${VPP_TOKEN:-}" ]]; then
+    # Try to load from file
+    if [ -f "/home/microm/nanohub/vpp/vpp_token.txt" ]; then
+        VPP_TOKEN=$(cat /home/microm/nanohub/vpp/vpp_token.txt)
+    else
+        echo "[ERROR] VPP_TOKEN is not set."
+        echo "Set environment variable: export VPP_TOKEN='your_token'"
+        echo "Or create file: /home/microm/nanohub/vpp/vpp_token.txt"
+        exit 1
+    fi
+fi
+
+echo "[INFO] Starting bulk install of VPP apps from $APPS_JSON..."
+echo "Target device UDID: $UDID"
+echo "Target device serial: $SERIAL"
+echo ""
+
+APP_COUNT=$(jq '.apps | length' "$APPS_JSON")
+echo "[INFO] Found $APP_COUNT apps to install"
+echo ""
+
+SUCCESSFUL_INSTALLS=0
+FAILED_INSTALLS=0
+
+for i in $(seq 0 $((APP_COUNT - 1))); do
+    ADAM_ID=$(jq -r ".apps[$i].adamId" "$APPS_JSON")
+    BUNDLE_ID=$(jq -r ".apps[$i].bundleId" "$APPS_JSON")
+    NAME=$(jq -r ".apps[$i].name" "$APPS_JSON")
+    
+    if [[ "$ADAM_ID" == "null" || "$BUNDLE_ID" == "null" || "$NAME" == "null" ]]; then
+        echo "[WARNING] Skipping app at index $i due to missing fields."
+        FAILED_INSTALLS=$((FAILED_INSTALLS + 1))
+        continue
+    fi
+    
+    echo "[$((i+1))/$APP_COUNT] Processing: $NAME ($BUNDLE_ID, adamId=$ADAM_ID)"
+    
+    # Step 1: Assign VPP license
+    echo "  [1/2] Assigning VPP license..."
+    VPP_PAYLOAD=$(jq -n \
+        --arg adamId "$ADAM_ID" \
+        --arg serial "$SERIAL" \
+        '{
+            assets: [ { adamId: $adamId, pricingParam: "STDQ" } ],
+            serialNumbers: [ $serial ]
+        }')
+    
+    VPP_RESPONSE=$(curl -sS -X POST \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $VPP_TOKEN" \
+        -d "$VPP_PAYLOAD" \
+        https://vpp.itunes.apple.com/mdm/v2/assets/associate)
+    
+    # Check for VPP errors
+    if echo "$VPP_RESPONSE" | jq -e '.errorMessage' > /dev/null; then
+        echo "  [ERROR] VPP License assignment failed for $NAME:"
+        echo "$VPP_RESPONSE" | jq .
+        FAILED_INSTALLS=$((FAILED_INSTALLS + 1))
+        continue
+    fi
+    
+    echo "  [OK] License assigned for $NAME"
+    
+    # Step 2: Send InstallApplication command
+    echo "  [2/2] Sending InstallApplication command..."
+    
+    # Generate command UUID
+    CMD_UUID=$(uuidgen)
+    
+    # Create InstallApplication command for NanoMDM
+    cat > /tmp/bulk_cmd_${i}.plist << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>InstallApplication</string>
+        <key>iTunesStoreID</key>
+        <integer>$ADAM_ID</integer>
+        <key>ManagementFlags</key>
+        <integer>1</integer>
+        <key>Options</key>
+        <dict>
+            <key>PurchaseMethod</key>
+            <integer>1</integer>
+        </dict>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+    
+    # Send InstallApplication command to NanoMDM
+    RESPONSE=$(curl -s -T /tmp/bulk_cmd_${i}.plist \
+        -u "nanohub:${NANOHUB_API_KEY}" \
+        -w "HTTP_CODE:%{http_code}" \
+        "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+    
+    HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+    
+    if [ "$HTTP_CODE" = "200" ]; then
+        echo "  [OK] InstallApplication command sent for $NAME"
+        SUCCESSFUL_INSTALLS=$((SUCCESSFUL_INSTALLS + 1))
+    else
+        echo "  [ERROR] Failed to send InstallApplication command for $NAME (HTTP: $HTTP_CODE)"
+        echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//'
+        ((FAILED_INSTALLS++))
+    fi
+    
+    # Cleanup temp file
+    rm -f /tmp/bulk_cmd_${i}.plist
+    
+    echo ""
+    
+    # Small delay to avoid overwhelming the device
+    sleep 2
+done
+
+echo "========================================"
+echo "[INFO] Bulk VPP app installation complete!"
+echo "========================================"
+echo "Successful installs: $SUCCESSFUL_INSTALLS"
+echo "Failed installs: $FAILED_INSTALLS"
+echo "Total apps processed: $APP_COUNT"
+echo ""
+echo "Monitor installations with:"
+echo "tail -f /var/log/nanohub/webhook.log | grep -E '(InstallApplication|app|Acknowledged)'"

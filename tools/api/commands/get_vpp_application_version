@@ -1,0 +1,169 @@
+#!/bin/bash
+# NanoHUB Get VPP Application Versions - podle MicroMDM scriptu
+# Fetches latest versions from iTunes API and updates JSON files
+
+set -euo pipefail
+
+# Paths - UPDATED for NanoHUB
+INPUT_IOS_JSON="/home/microm/nanohub/data/apps_ios.json"
+OUTPUT_IOS_JSON="/home/microm/nanohub/data/apps_ios_with_versions.json"
+INPUT_MACOS_JSON="/home/microm/nanohub/data/apps_macos.json"
+OUTPUT_MACOS_JSON="/home/microm/nanohub/data/apps_macos_with_versions.json"
+
+LOGFILE="/var/log/nanohub/vpp_versions.log"
+
+# Create log directory if not exists
+mkdir -p "$(dirname "$LOGFILE")"
+
+# Logging function
+log() {
+    local message="$1"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "$timestamp $message" | tee -a "$LOGFILE"
+}
+
+log "=================================================="
+log "STARTING VPP VERSION UPDATE PROCESS"
+log "=================================================="
+log "Input iOS apps: $INPUT_IOS_JSON"
+log "Output iOS apps: $OUTPUT_IOS_JSON"
+log "Input macOS apps: $INPUT_MACOS_JSON"
+log "Output macOS apps: $OUTPUT_MACOS_JSON"
+log "Log file: $LOGFILE"
+log ""
+
+# Validate required files
+for file in "$INPUT_IOS_JSON" "$INPUT_MACOS_JSON"; do
+    if [ ! -f "$file" ]; then
+        log "[ERROR] Required input file not found: $file"
+        log "[INFO] Create it with format: {\"apps\": [{\"adamId\": \"123\", \"bundleId\": \"com.example.app\", \"name\": \"App Name\"}]}"
+        exit 1
+    fi
+done
+
+# Process iOS apps
+if [ -f "$INPUT_IOS_JSON" ]; then
+    log "[INFO] Processing iOS applications..."
+    
+    ios_count=$(jq '.apps | length' "$INPUT_IOS_JSON")
+    log "[INFO] Found $ios_count iOS apps to process"
+    
+    processed_ios=0
+    failed_ios=0
+    
+    # Create temporary file for iOS apps with versions
+    temp_ios_file=$(mktemp)
+    
+    jq -c '.apps[]' "$INPUT_IOS_JSON" | while read -r app; do
+        bundleId=$(echo "$app" | jq -r '.bundleId')
+        appName=$(echo "$app" | jq -r '.name // .bundleId')
+        
+        log "[INFO] [$((++processed_ios))/$ios_count] Fetching version for iOS app: $appName ($bundleId)"
+        
+        # Fetch version from iTunes API with timeout
+        version=$(timeout 10 curl -s "https://itunes.apple.com/lookup?bundleId=${bundleId}&country=us" 2>/dev/null | jq -r '.results[0].version // "not_found"' 2>/dev/null || echo "api_error")
+        
+        if [ "$version" = "not_found" ] || [ "$version" = "api_error" ] || [ -z "$version" ]; then
+            log "[WARNING] Could not fetch version for $appName ($bundleId) - using 'unknown'"
+            version="unknown"
+            failed_ios=$((failed_ios + 1))
+        else
+            log "[SUCCESS] $appName version: $version"
+        fi
+        
+        # Add version to app object
+        echo "$app" | jq --arg version "$version" '. + {version: $version}' >> "$temp_ios_file"
+        
+        # Small delay to avoid rate limiting
+        sleep 0.5
+    done
+    
+    # Combine all iOS apps into final JSON
+    if [ -s "$temp_ios_file" ]; then
+        jq -s '{apps: .}' "$temp_ios_file" > "$OUTPUT_IOS_JSON"
+        log "[SUCCESS] iOS apps with versions saved to: $OUTPUT_IOS_JSON"
+    else
+        log "[ERROR] No iOS apps processed successfully"
+        exit 1
+    fi
+    
+    # Cleanup temp file
+    rm -f "$temp_ios_file"
+    
+    log "[INFO] iOS processing complete: $((ios_count - failed_ios)) success, $failed_ios failed"
+    log ""
+fi
+
+# Process macOS apps
+if [ -f "$INPUT_MACOS_JSON" ]; then
+    log "[INFO] Processing macOS applications..."
+    
+    macos_count=$(jq '.apps | length' "$INPUT_MACOS_JSON")
+    log "[INFO] Found $macos_count macOS apps to process"
+    
+    processed_macos=0
+    failed_macos=0
+    
+    # Create temporary file for macOS apps with versions
+    temp_macos_file=$(mktemp)
+    
+    jq -c '.apps[]' "$INPUT_MACOS_JSON" | while read -r app; do
+        bundleId=$(echo "$app" | jq -r '.bundleId')
+        appName=$(echo "$app" | jq -r '.name // .bundleId')
+        
+        log "[INFO] [$((++processed_macos))/$macos_count] Fetching version for macOS app: $appName ($bundleId)"
+        
+        # Fetch version from iTunes API with timeout
+        version=$(timeout 10 curl -s "https://itunes.apple.com/lookup?bundleId=${bundleId}&country=us" 2>/dev/null | jq -r '.results[0].version // "not_found"' 2>/dev/null || echo "api_error")
+        
+        if [ "$version" = "not_found" ] || [ "$version" = "api_error" ] || [ -z "$version" ]; then
+            log "[WARNING] Could not fetch version for $appName ($bundleId) - using 'unknown'"
+            version="unknown"
+            failed_macos=$((failed_macos + 1))
+        else
+            log "[SUCCESS] $appName version: $version"
+        fi
+        
+        # Add version to app object
+        echo "$app" | jq --arg version "$version" '. + {version: $version}' >> "$temp_macos_file"
+        
+        # Small delay to avoid rate limiting
+        sleep 0.5
+    done
+    
+    # Combine all macOS apps into final JSON
+    if [ -s "$temp_macos_file" ]; then
+        jq -s '{apps: .}' "$temp_macos_file" > "$OUTPUT_MACOS_JSON"
+        log "[SUCCESS] macOS apps with versions saved to: $OUTPUT_MACOS_JSON"
+    else
+        log "[ERROR] No macOS apps processed successfully"
+        exit 1
+    fi
+    
+    # Cleanup temp file
+    rm -f "$temp_macos_file"
+    
+    log "[INFO] macOS processing complete: $((macos_count - failed_macos)) success, $failed_macos failed"
+    log ""
+fi
+
+log "=================================================="
+log "VPP VERSION UPDATE COMPLETED"
+log "=================================================="
+if [ -f "$OUTPUT_IOS_JSON" ]; then
+    ios_final_count=$(jq '.apps | length' "$OUTPUT_IOS_JSON")
+    log "iOS apps processed: $ios_final_count"
+fi
+if [ -f "$OUTPUT_MACOS_JSON" ]; then
+    macos_final_count=$(jq '.apps | length' "$OUTPUT_MACOS_JSON")
+    log "macOS apps processed: $macos_final_count"
+fi
+log ""
+log "Output files:"
+log "  iOS: $OUTPUT_IOS_JSON"
+log "  macOS: $OUTPUT_MACOS_JSON"
+log "  Log: $LOGFILE"
+log ""
+log "These files are ready for use with update_vpp_from_list script"
+log "=================================================="

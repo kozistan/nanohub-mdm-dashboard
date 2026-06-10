@@ -192,17 +192,19 @@ COMMANDS = {
     'install_application': {
         'name': 'Install Application',
         'category': 'apps',
-        'description': 'Install application via manifest URL',
+        'description': 'Install application via manifest URL (from list or custom)',
         'script': '_internal_install_application',
         'parameters': [
             {'name': 'devices', 'label': 'Devices', 'type': 'devices', 'required': True},
-            {'name': 'manifest_url', 'label': 'Manifest URL', 'type': 'string', 'required': True,
-             'placeholder': 'https://example.com/app.plist'},
+            {'name': 'app_select', 'label': 'Application from list', 'type': 'select', 'required': False,
+             'options': [{'value': '', 'label': '-- Select existing app or use Custom URL below --'}]},
+            {'name': 'manifest_url', 'label': 'Custom Manifest URL', 'type': 'string', 'required': False,
+             'placeholder': 'https://example.com/app.plist (overrides selection above)'},
         ],
         'dangerous': False,
         'min_role': 'operator',
         'bulk_supported': False,
-        'info_text': 'Install application via manifest URL. Select one or multiple devices.',
+        'info_text': 'Install application via manifest URL. Pick from existing apps in required_applications table OR enter custom URL. If both filled, custom URL takes priority.',
     },
     'installed_application_list': {
         'name': 'List Installed Apps',

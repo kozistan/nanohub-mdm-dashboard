@@ -1,0 +1,165 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+# NanoHUB Full System Report - DeviceInformation + SecurityInfo
+# Usage: ./system_report_full <UDID>
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <UDID>"
+    exit 1
+fi
+
+UDID="$1"
+CMD_UUID_DEVICE=$(uuidgen)
+CMD_UUID_SECURITY=$(uuidgen)
+
+# Output UUIDs for API parsing (format: uuid1|uuid2)
+echo "$CMD_UUID_DEVICE|$CMD_UUID_SECURITY"
+echo "Getting full system report for device: $UDID"
+
+# 1. Send DeviceInformation
+cat > /tmp/cmd_device_$$.plist << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>DeviceInformation</string>
+        <key>Queries</key>
+        <array>
+            <string>UDID</string>
+            <string>DeviceName</string>
+            <string>OSVersion</string>
+            <string>BuildVersion</string>
+            <string>ModelName</string>
+            <string>Model</string>
+            <string>ProductName</string>
+            <string>SerialNumber</string>
+            <string>DeviceCapacity</string>
+            <string>AvailableDeviceCapacity</string>
+            <string>BatteryLevel</string>
+            <string>CellularTechnology</string>
+            <string>IMEI</string>
+            <string>MEID</string>
+            <string>ModemFirmwareVersion</string>
+            <string>IsSupervised</string>
+            <string>IsDeviceLocatorServiceEnabled</string>
+            <string>IsActivationLockEnabled</string>
+            <string>IsDoNotDisturbInEffect</string>
+            <string>IsCloudBackupEnabled</string>
+            <string>OSUpdateSettings</string>
+            <string>LocalHostName</string>
+            <string>HostName</string>
+            <string>SystemIntegrityProtectionEnabled</string>
+            <string>IsMDMLostModeEnabled</string>
+            <string>WiFiMAC</string>
+            <string>BluetoothMAC</string>
+            <string>EthernetMAC</string>
+        </array>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID_DEVICE</string>
+</dict>
+</plist>
+PLIST_EOF
+
+RESPONSE1=$(curl -s -T /tmp/cmd_device_$$.plist \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+HTTP_CODE1=$(echo "$RESPONSE1" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+rm -f /tmp/cmd_device_$$.plist
+
+# 2. Send SecurityInfo
+cat > /tmp/cmd_security_$$.plist << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>SecurityInfo</string>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID_SECURITY</string>
+</dict>
+</plist>
+PLIST_EOF
+
+RESPONSE2=$(curl -s -T /tmp/cmd_security_$$.plist \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+HTTP_CODE2=$(echo "$RESPONSE2" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+rm -f /tmp/cmd_security_$$.plist
+
+if [ "$HTTP_CODE1" != "200" ] || [ "$HTTP_CODE2" != "200" ]; then
+    echo "Failed to send commands (HTTP: $HTTP_CODE1 / $HTTP_CODE2)"
+    exit 1
+fi
+
+echo "Commands sent, waiting for device response..."
+echo ""
+
+# Poll webhook log for both responses (max 20 seconds)
+WEBHOOK_LOG="/var/log/nanohub/webhook.log"
+FOUND_DEVICE=0
+FOUND_SECURITY=0
+
+for i in {1..20}; do
+    sleep 1
+
+    # Check for DeviceInformation response
+    if [ $FOUND_DEVICE -eq 0 ] && grep -q "command_uuid: $CMD_UUID_DEVICE" "$WEBHOOK_LOG" 2>/dev/null; then
+        FOUND_DEVICE=1
+    fi
+
+    # Check for SecurityInfo response
+    if [ $FOUND_SECURITY -eq 0 ] && grep -q "command_uuid: $CMD_UUID_SECURITY" "$WEBHOOK_LOG" 2>/dev/null; then
+        FOUND_SECURITY=1
+    fi
+
+    # If both found, extract and display
+    if [ $FOUND_DEVICE -eq 1 ] && [ $FOUND_SECURITY -eq 1 ]; then
+        echo "=== DEVICE INFORMATION ==="
+        LINE_NUM=$(grep -n "command_uuid: $CMD_UUID_DEVICE" "$WEBHOOK_LOG" | tail -1 | cut -d: -f1)
+        if [ -n "$LINE_NUM" ]; then
+            tail -n +$LINE_NUM "$WEBHOOK_LOG" | head -60 | grep -E "\[INFO\]" | grep -v "=== MDM Event ===" | grep -v "topic:" | grep -v "status:" | grep -v "udid:" | grep -v "command_uuid:" | head -40
+        fi
+
+        echo ""
+        echo "=== SECURITY INFO ==="
+        LINE_NUM=$(grep -n "command_uuid: $CMD_UUID_SECURITY" "$WEBHOOK_LOG" | tail -1 | cut -d: -f1)
+        if [ -n "$LINE_NUM" ]; then
+            tail -n +$LINE_NUM "$WEBHOOK_LOG" | head -60 | grep -E "\[INFO\]" | grep -v "=== MDM Event ===" | grep -v "topic:" | grep -v "status:" | grep -v "udid:" | grep -v "command_uuid:" | head -40
+        fi
+
+        exit 0
+    fi
+done
+
+# Partial results if only one responded
+if [ $FOUND_DEVICE -eq 1 ]; then
+    echo "=== DEVICE INFORMATION ==="
+    LINE_NUM=$(grep -n "command_uuid: $CMD_UUID_DEVICE" "$WEBHOOK_LOG" | tail -1 | cut -d: -f1)
+    if [ -n "$LINE_NUM" ]; then
+        tail -n +$LINE_NUM "$WEBHOOK_LOG" | head -60 | grep -E "\[INFO\]" | grep -v "=== MDM Event ===" | grep -v "topic:" | grep -v "status:" | grep -v "udid:" | grep -v "command_uuid:" | head -40
+    fi
+    echo ""
+    echo "[WARNING] SecurityInfo response not received"
+elif [ $FOUND_SECURITY -eq 1 ]; then
+    echo "[WARNING] DeviceInformation response not received"
+    echo ""
+    echo "=== SECURITY INFO ==="
+    LINE_NUM=$(grep -n "command_uuid: $CMD_UUID_SECURITY" "$WEBHOOK_LOG" | tail -1 | cut -d: -f1)
+    if [ -n "$LINE_NUM" ]; then
+        tail -n +$LINE_NUM "$WEBHOOK_LOG" | head -60 | grep -E "\[INFO\]" | grep -v "=== MDM Event ===" | grep -v "topic:" | grep -v "status:" | grep -v "udid:" | grep -v "command_uuid:" | head -40
+    fi
+else
+    echo "Timeout waiting for device response (20s)."
+    echo "Device may be offline or sleeping."
+    exit 1
+fi

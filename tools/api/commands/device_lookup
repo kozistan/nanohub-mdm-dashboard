@@ -1,0 +1,48 @@
+#!/bin/bash
+#
+# Device Lookup Script (SQL Version)
+# Updated: 2025-12-03 - Migrated from devices.json to SQL
+#
+
+# Source environment variables for DB credentials
+if [[ -f /home/microm/nanohub/environment.sh ]]; then
+  source /home/microm/nanohub/environment.sh
+else
+  echo "Error: /home/microm/nanohub/environment.sh not found!"
+  exit 1
+fi
+
+# Check if search term is provided
+if [[ -z "$1" ]]; then
+  echo "Usage: $0 <partial_serial_or_name_or_hostname_or_uuid_or_os>"
+  exit 1
+fi
+
+SEARCH_TERM="$1"
+
+# Search using SQL - search across all fields
+SQL="SELECT JSON_OBJECT(
+  'uuid', uuid,
+  'serial', serial,
+  'os', os,
+  'hostname', hostname,
+  'manifest', manifest,
+  'account', account,
+  'dep', dep
+) FROM device_inventory
+WHERE LOWER(serial) LIKE LOWER('%${SEARCH_TERM}%')
+   OR LOWER(hostname) LIKE LOWER('%${SEARCH_TERM}%')
+   OR LOWER(uuid) LIKE LOWER('%${SEARCH_TERM}%')
+   OR LOWER(os) LIKE LOWER('%${SEARCH_TERM}%')
+ORDER BY hostname"
+
+MATCHES=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -sN -e "$SQL" 2>/dev/null)
+
+if [[ -z "$MATCHES" ]]; then
+  echo "No match found for '$SEARCH_TERM'."
+else
+  echo "Matching devices:"
+  echo "$MATCHES" | while read -r line; do
+    echo "$line" | python3 -m json.tool
+  done
+fi

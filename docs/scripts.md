@@ -10,7 +10,7 @@ Command-line tools for automation and maintenance.
 │   ├── api/commands/      # MDM command scripts
 │   ├── inventory_update.py
 │   └── queue_cleanup.py   # MDM queue maintenance
-├── ddm/                   # DDM declarations + set definitions
+├── ddm/scripts/           # DDM management
 └── backend_api/
     ├── manage_roles.py    # User role management
     ├── nanohub_admin_core.py  # Blueprint registration (~43 lines)
@@ -216,26 +216,26 @@ Runs daily at 03:00:
 
 ## DDM Scripts
 
-Location: `/usr/local/bin/`
-
-See [DDM documentation](ddm) for detailed usage, declaration types, and troubleshooting.
+Location: `/opt/nanohub/ddm/scripts/`
 
 ```bash
-# Upload all declaration JSON files to KMFDDM
-ddm-upload-declarations.sh
+# Upload all declarations
+./ddm-upload-declarations.sh
 
-# Create sets from TXT definition files
-ddm-create-sets.sh
+# Create sets
+./ddm-create-sets.sh
 
-# Assign/remove set to/from device
-ddm-assign-device.sh assign <UDID> <set-name>
-ddm-assign-device.sh remove <UDID> <set-name>
+# Assign device to set
+./ddm-assign-device.sh <UDID> <set-name>
 
-# Bulk assign/remove
-ddm-bulk-assign.sh assign "UDID1,UDID2" <set-name>
+# Force sync
+./ddm-force-sync.sh <UDID>
 
 # Status check
-ddm-status.sh [declarations|sets|device <UDID>]
+./ddm-status.sh all|declarations|sets|device <UDID>
+
+# Bulk assign
+./ddm-bulk-assign.sh <set-name> <UDID1> <UDID2> ...
 ```
 
 ## User Role Management

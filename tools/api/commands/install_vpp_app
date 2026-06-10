@@ -1,0 +1,132 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+# Install VPP application on device (as managed app) - NanoHUB version
+# This version ensures VPP license is associated before install.
+set -euo pipefail
+
+# Usage: ./install_vpp_application <UDID> <ADAM_ID> <SERIAL> <BUNDLE_ID>
+if [ $# -ne 4 ]; then
+    echo "Usage: $0 <UDID> <ADAM_ID> <SERIAL> <BUNDLE_ID>"
+    echo "Example: $0 00008020-0001713C1E90003A 361309726 F4GXDDQRKXK2 com.apple.Pages"
+    echo ""
+    echo "ADAM_ID: iTunes Store ID (from app URL)"
+    echo "SERIAL: Device serial number" 
+    echo "BUNDLE_ID: App bundle identifier"
+    exit 1
+fi
+
+UDID="$1"
+ADAM_ID="$2"
+SERIAL="$3"
+BUNDLE_ID="$4"
+
+# VPP Token - zkontroluj environment nebo config
+if [[ -z "${VPP_TOKEN:-}" ]]; then
+    # Zkus načíst z file
+    if [ -f "/home/microm/nanohub/vpp/vpp_token.txt" ]; then
+        VPP_TOKEN=$(cat /home/microm/nanohub/vpp/vpp_token.txt)
+    else
+        echo "Error: VPP_TOKEN is not set."
+        echo "Set environment variable: export VPP_TOKEN='your_token'"
+        echo "Or create file: /home/microm/nanohub/vpp/vpp_token.txt"
+        exit 1
+    fi
+fi
+
+echo "Assigning VPP license for app $ADAM_ID to device $SERIAL..."
+
+# VPP License Assignment Payload
+VPP_PAYLOAD=$(jq -n \
+  --arg adamId "$ADAM_ID" \
+  --arg serial "$SERIAL" \
+  '{
+    assets: [ { adamId: $adamId, pricingParam: "STDQ" } ],
+    serialNumbers: [ $serial ]
+  }')
+
+# Assign VPP License
+VPP_RESPONSE=$(curl -sS -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $VPP_TOKEN" \
+  -d "$VPP_PAYLOAD" \
+  https://vpp.itunes.apple.com/mdm/v2/assets/associate)
+
+echo "VPP Assignment Response:"
+echo "$VPP_RESPONSE" | jq .
+
+# Check for errors in VPP response
+if echo "$VPP_RESPONSE" | jq -e '.errorMessage' > /dev/null; then
+    echo "VPP License assignment failed:"
+    echo "$VPP_RESPONSE" | jq .
+    exit 1
+fi
+
+echo "License assigned."
+echo "Sending InstallApplication command..."
+
+# Generate command UUID
+CMD_UUID=$(uuidgen)
+
+# Create InstallApplication command for NanoMDM (unique temp file for parallel execution)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+cat > "$TEMP_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>InstallApplication</string>
+        <key>iTunesStoreID</key>
+        <integer>$ADAM_ID</integer>
+
+        <key>ManagementFlags</key>
+        <integer>1</integer>
+        <key>Options</key>
+        <dict>
+            <key>PurchaseMethod</key>
+            <integer>1</integer>
+        </dict>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$CMD_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
+echo "Installing VPP App as MANAGED:"
+echo "  Device UDID: $UDID"
+echo "  iTunes Store ID: $ADAM_ID"
+echo "  Serial Number: $SERIAL"
+echo "  Bundle ID: $BUNDLE_ID"
+echo "  Command UUID: $CMD_UUID"
+
+# Send InstallApplication command to NanoMDM
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+# Cleanup
+rm -f "$TEMP_PLIST"
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "Managed VPP App installation command sent successfully!"
+    echo "App should appear as MANAGED on device"
+    echo "Response: $BODY"
+else
+    echo "Failed to send VPP app installation command (HTTP: $HTTP_CODE)"
+    echo "Response: $BODY"
+    exit 1
+fi
+
+echo ""
+echo "VPP Managed App installation complete!"
+echo ""
+echo "Monitor installation with:"
+echo "tail -f /var/log/nanohub/webhook.log | grep -E '(InstallApplication|app)'"

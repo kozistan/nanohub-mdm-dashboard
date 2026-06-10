@@ -1,0 +1,33 @@
+[Unit]
+Description=NanoMDM Server
+Requires=docker.service
+After=docker.service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=microm
+Group=docker
+WorkingDirectory=/home/microm/nanohub/nanomdm
+Environment=HOME=/home/microm
+ExecStart=/bin/bash -c '\
+  source /opt/nanohub/environment.sh && \
+  /usr/bin/docker run --rm --name nanomdm \
+  --network host \
+  -v /home/microm/nanohub/nanomdm/certs:/certs \
+  ghcr.io/micromdm/nanomdm:latest \
+  -storage mysql \
+  -storage-dsn "$${DB_USER}:$${DB_PASSWORD}@tcp(127.0.0.1:3306)/$${DB_NAME}?parseTime=true" \
+  -api $${NANOHUB_API_KEY} \
+  -ca /certs/combined_scep_ca.pem \
+  -webhook-url http://localhost:5001/webhook \
+  -listen :9004 \
+  -debug'
+StandardOutput=append:/var/log/nanohub/nanomdm.log
+StandardError=append:/var/log/nanohub/nanomdm.log
+ExecStop=/usr/bin/docker stop nanomdm
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

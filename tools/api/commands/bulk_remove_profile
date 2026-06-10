@@ -1,0 +1,79 @@
+#!/bin/bash
+#
+# NanoHUB Bulk Remove Profile Script
+#
+# Description:
+# This script removes a specified profile identified by ProfileIdentifier from all devices listed in data/devices.json,
+# filtered by the given target operating system ('ios' or 'macos').
+#
+# Usage:
+#   ./bulk_remove_profile.sh <ios|macos> <ProfileIdentifier>
+#
+# Parameters:
+#   <ios|macos>         - Target OS to filter devices
+#   <ProfileIdentifier> - Identifier of profile to be removed (e.g., com.tolar.wifi.corporate)
+#
+# Example:
+#   ./bulk_remove_profile.sh ios com.tolar.wifi.corporate
+#   ./bulk_remove_profile.sh macos com.tolar.macos.security
+#
+# Requirements:
+#   - 'jq' command line JSON processor installed
+#   - External 'remove_profile' script available and executable
+#
+
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+  echo "Usage: $0 <ios|macos> <ProfileIdentifier>"
+  exit 1
+fi
+
+TARGET_OS="$1"
+PROFILE_ID="$2"
+REMOVE_PROFILE_SCRIPT="./tools/api/commands/remove_profile"
+
+if [ ! -x "$REMOVE_PROFILE_SCRIPT" ]; then
+  echo "[ERROR] Remove profile script '$REMOVE_PROFILE_SCRIPT' not found or not executable."
+  exit 1
+fi
+
+# Source environment variables for DB credentials
+if [[ -f /home/microm/nanohub/environment.sh ]]; then
+  source /home/microm/nanohub/environment.sh
+else
+  echo "[ERROR] /home/microm/nanohub/environment.sh not found!"
+  exit 1
+fi
+
+echo "Starting bulk removal of profile '$PROFILE_ID' on devices with OS: $TARGET_OS"
+
+DEVICE_UUIDS=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -sN -e "SELECT uuid FROM device_inventory WHERE os='$TARGET_OS' ORDER BY hostname" 2>/dev/null)
+
+if [ -z "$DEVICE_UUIDS" ]; then
+  echo "No devices found for OS: $TARGET_OS"
+  exit 0
+fi
+
+# Count devices
+DEVICE_COUNT=$(echo "$DEVICE_UUIDS" | wc -l)
+echo "Found $DEVICE_COUNT device(s)"
+echo ""
+echo "Starting parallel execution..."
+echo ""
+
+# Parallel execution - all commands run simultaneously
+for UDID in $DEVICE_UUIDS; do
+  echo "Removing profile '$PROFILE_ID' from device UDID: $UDID"
+  "$REMOVE_PROFILE_SCRIPT" "$UDID" "$PROFILE_ID" &
+done
+
+# Wait for all background jobs to complete
+wait
+
+echo ""
+echo "========================================="
+echo "Bulk profile removal completed"
+echo "Total devices: $DEVICE_COUNT"
+echo "All commands sent in parallel"
+echo "========================================="

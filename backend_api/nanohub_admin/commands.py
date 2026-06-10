@@ -16,6 +16,7 @@ Moved from nanohub_admin_core.py for better modularity.
 import os
 import re
 import json
+import glob
 import base64
 import urllib.request
 import urllib.error
@@ -2540,12 +2541,17 @@ def execute_install_application(params, user_info):
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     devices = normalize_devices_param(params.get('devices'))
-    manifest_url = params.get('manifest_url')
+    manifest_url = (params.get('manifest_url') or '').strip()
+    app_select = (params.get('app_select') or '').strip()
+
+    # Custom manifest_url overrides app_select; fall back to selection if empty
+    if not manifest_url and app_select:
+        manifest_url = app_select
 
     if not devices:
         return {'success': False, 'error': 'Missing required parameter: devices'}
     if not manifest_url:
-        return {'success': False, 'error': 'Missing required parameter: manifest_url'}
+        return {'success': False, 'error': 'Missing required parameter: pick app from list or provide custom Manifest URL'}
 
     script_path = os.path.join(COMMANDS_DIR, 'install_application')
 

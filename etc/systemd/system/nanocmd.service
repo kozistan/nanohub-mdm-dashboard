@@ -1,0 +1,37 @@
+[Unit]
+Description=NanoCMD Workflow Server
+Requires=docker.service
+After=docker.service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=microm
+Group=docker
+WorkingDirectory=/home/microm/nanohub/nanocmd
+Environment=HOME=/home/microm
+ExecStartPre=-/bin/bash -c '/usr/bin/docker stop nanocmd 2>/dev/null || true'
+ExecStartPre=-/bin/bash -c '/usr/bin/docker rm nanocmd 2>/dev/null || true'
+ExecStart=/bin/bash -c '\
+  source /opt/nanohub/environment.sh && \
+  /usr/bin/docker run --rm --name nanocmd \
+  --network host \
+  -v /etc/localtime:/etc/localtime:ro \
+  -v /etc/timezone:/etc/timezone:ro \
+  -v /home/microm/nanohub/nanocmd:/data \
+  ghcr.io/micromdm/nanocmd:latest \
+  -api $${NANOCMD_API_KEY} \
+  -enqueue-api $${NANOHUB_API_KEY} \
+  -enqueue-url http://localhost:9004/api/v1/nanomdm/enqueue/ \
+  -push-url http://localhost:9004/api/v1/nanomdm/push/ \
+  -storage mysql \
+  -storage-dsn "$${DB_USER}:$${DB_PASSWORD}@tcp(127.0.0.1:3306)/$${DB_NAME}" \
+  -debug'
+StandardOutput=append:/var/log/nanohub/nanocmd.log
+StandardError=append:/var/log/nanohub/nanocmd.log
+ExecStop=/usr/bin/docker stop nanocmd
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
