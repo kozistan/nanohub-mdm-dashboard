@@ -5,10 +5,10 @@
 set -euo pipefail
 
 # Paths - UPDATED for NanoHUB
-INPUT_IOS_JSON="/home/microm/nanohub/data/apps_ios.json"
-OUTPUT_IOS_JSON="/home/microm/nanohub/data/apps_ios_with_versions.json"
-INPUT_MACOS_JSON="/home/microm/nanohub/data/apps_macos.json"
-OUTPUT_MACOS_JSON="/home/microm/nanohub/data/apps_macos_with_versions.json"
+INPUT_IOS_JSON="/opt/nanohub/data/apps_ios.json"
+OUTPUT_IOS_JSON="/opt/nanohub/data/apps_ios_with_versions.json"
+INPUT_MACOS_JSON="/opt/nanohub/data/apps_macos.json"
+OUTPUT_MACOS_JSON="/opt/nanohub/data/apps_macos_with_versions.json"
 
 LOGFILE="/var/log/nanohub/vpp_versions.log"
 

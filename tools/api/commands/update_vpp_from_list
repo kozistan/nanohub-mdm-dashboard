@@ -5,11 +5,11 @@
 set -uo pipefail
 
 # Paths - UPDATED for NanoHUB
-IOS_APPS="/home/microm/nanohub/data/apps_ios_with_versions.json"
-MACOS_APPS="/home/microm/nanohub/data/apps_macos_with_versions.json"
-INSTALL_SCRIPT="/home/microm/nanohub/tools/api/commands/install_vpp_app"
-CMD_LIST_SCRIPT="/home/microm/nanohub/tools/api/commands/installed_application_list"
-NANOHUB_ENV="/home/microm/nanohub/environment.sh"
+IOS_APPS="/opt/nanohub/data/apps_ios_with_versions.json"
+MACOS_APPS="/opt/nanohub/data/apps_macos_with_versions.json"
+INSTALL_SCRIPT="/opt/nanohub/tools/api/commands/install_vpp_app"
+CMD_LIST_SCRIPT="/opt/nanohub/tools/api/commands/installed_application_list"
+NANOHUB_ENV="/opt/nanohub/environment.sh"
 LOGFILE="/var/log/nanohub/update_vpp.log"
 
 # Source environment (includes DB credentials, Telegram config)

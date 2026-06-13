@@ -24,12 +24,12 @@ BUNDLE_ID="$4"
 # VPP Token - zkontroluj environment nebo config
 if [[ -z "${VPP_TOKEN:-}" ]]; then
     # Zkus načíst z file
-    if [ -f "/home/microm/nanohub/vpp/vpp_token.txt" ]; then
-        VPP_TOKEN=$(cat /home/microm/nanohub/vpp/vpp_token.txt)
+    if [ -f "/opt/nanohub/vpp/vpp_token.txt" ]; then
+        VPP_TOKEN=$(cat /opt/nanohub/vpp/vpp_token.txt)
     else
         echo "Error: VPP_TOKEN is not set."
         echo "Set environment variable: export VPP_TOKEN='your_token'"
-        echo "Or create file: /home/microm/nanohub/vpp/vpp_token.txt"
+        echo "Or create file: /opt/nanohub/vpp/vpp_token.txt"
         exit 1
     fi
 fi
