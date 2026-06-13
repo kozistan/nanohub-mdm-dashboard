@@ -5,7 +5,7 @@
 # Check argument
 if [ "$#" -ne 1 ]; then
     echo "Usage: $0 /path/to/profile.mobileconfig"
-    echo "Example: $0 /home/microm/nanohub/profiles/wifi-corporate.mobileconfig"
+    echo "Example: $0 /opt/nanohub/profiles/wifi-corporate.mobileconfig"
     exit 1
 fi
 
@@ -18,22 +18,22 @@ if [ ! -f "$INPUT_PROFILE" ]; then
 fi
 
 # Paths to key and certificate - UPDATED for NanoHUB
-KEY_PATH="/home/microm/nanohub/certs/VendorPrivateKey.key"
-CERT_PATH="/home/microm/nanohub/certs/mdm_cert_clean.pem"
+KEY_PATH="/opt/nanohub/certs/VendorPrivateKey.key"
+CERT_PATH="/opt/nanohub/certs/mdm_cert_clean.pem"
 KEY_PASSWORD="${MDM_CERT_PASSWORD}"
 
 # Verify certificate files exist
 if [ ! -f "$KEY_PATH" ]; then
     echo "[ERROR] Private key not found: $KEY_PATH"
     echo "Available certificates:"
-    ls -la /home/microm/nanohub/certs/
+    ls -la /opt/nanohub/certs/
     exit 1
 fi
 
 if [ ! -f "$CERT_PATH" ]; then
     echo "[ERROR] Certificate not found: $CERT_PATH"
     echo "Available certificates:"
-    ls -la /home/microm/nanohub/certs/
+    ls -la /opt/nanohub/certs/
     exit 1
 fi
 
@@ -74,7 +74,7 @@ if [ $RESULT -eq 0 ]; then
     echo "[OK] Signed profile saved to: $OUTPUT_PROFILE"
 
     # Also copy to /opt/nanohub/profiles/ with same relative path
-    SOURCE_BASE="/home/microm/nanohub/profiles"
+    SOURCE_BASE="/opt/nanohub/profiles"
     DEST_BASE="/opt/nanohub/profiles"
 
     # Check if input is under source base
@@ -88,11 +88,15 @@ if [ $RESULT -eq 0 ]; then
         DEST_DIR="$DEST_BASE/$RELATIVE_DIR"
         mkdir -p "$DEST_DIR"
 
-        # Copy signed profile to destination
+        # Copy signed profile to destination (skip if already same file — po konsolidaci 2026-06-13 jsou source i dest /opt)
         DEST_FILE="$DEST_DIR/$SIGNED_FILENAME"
-        cp "$OUTPUT_PROFILE" "$DEST_FILE"
+        if [ "$OUTPUT_PROFILE" -ef "$DEST_FILE" ]; then
+            cp_rc=0
+        else
+            cp "$OUTPUT_PROFILE" "$DEST_FILE"; cp_rc=$?
+        fi
 
-        if [ $? -eq 0 ]; then
+        if [ $cp_rc -eq 0 ]; then
             echo "[OK] Also copied to: $DEST_FILE"
         else
             echo "[WARN] Failed to copy to: $DEST_FILE"

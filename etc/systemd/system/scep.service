@@ -1,0 +1,28 @@
+[Unit]
+Description=SCEP Server Docker
+Requires=docker.service
+After=docker.service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=microm
+Group=docker
+WorkingDirectory=/opt/nanohub/scep-docker
+Environment=HOME=/home/microm
+ExecStartPre=-/bin/bash -c '/usr/bin/docker stop scep-server 2>/dev/null || true'
+ExecStartPre=-/bin/bash -c '/usr/bin/docker rm scep-server 2>/dev/null || true'
+ExecStart=/usr/bin/docker run --rm --name scep-server \
+  --network host \
+  -v /opt/nanohub/scep-docker:/scep \
+  -w /scep \
+  alpine:latest \
+  ./scepserver-linux-amd64 -depot depot -debug -challenge micromdm -port 8080 -allowrenew 0
+StandardOutput=append:/var/log/nanohub/scep-docker.log
+StandardError=append:/var/log/nanohub/scep-docker.log
+ExecStop=/usr/bin/docker stop scep-server
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -5,12 +5,12 @@
 set -euo pipefail
 
 # Paths - UPDATED for NanoHUB
-declare -r SIGN_SCRIPT="/home/microm/nanohub/tools/api/commands/sign_profile"
+declare -r SIGN_SCRIPT="/opt/nanohub/tools/api/commands/sign_profile"
 
 # Check argument
 if [ "$#" -ne 1 ]; then
     echo "Usage: $0 /path/to/directory"
-    echo "Example: $0 /home/microm/nanohub/profiles"
+    echo "Example: $0 /opt/nanohub/profiles"
     echo "Example: $0 /var/www/mdm"
     exit 1
 fi

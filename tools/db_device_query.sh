@@ -22,8 +22,10 @@
 #   db_device_query.sh count_by_os ios
 #
 
-# Source environment variables from HOME directory
-if [ -f /home/microm/nanohub/environment.sh ]; then
+# Source environment variables (prefer /opt, fallback to legacy /home)
+if [ -f /opt/nanohub/environment.sh ]; then
+    source /opt/nanohub/environment.sh
+elif [ -f /home/microm/nanohub/environment.sh ]; then
     source /home/microm/nanohub/environment.sh
 else
     echo "Error: environment.sh not found!"

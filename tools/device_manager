@@ -29,10 +29,10 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Source environment variables
-if [[ -f /home/microm/nanohub/environment.sh ]]; then
-  source /home/microm/nanohub/environment.sh
+if [[ -f /opt/nanohub/environment.sh ]]; then
+  source /opt/nanohub/environment.sh
 else
-  echo -e "${RED}Error: /home/microm/nanohub/environment.sh not found!${NC}"
+  echo -e "${RED}Error: /opt/nanohub/environment.sh not found!${NC}"
   exit 1
 fi
 

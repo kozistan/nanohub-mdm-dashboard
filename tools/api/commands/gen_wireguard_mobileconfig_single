@@ -1,7 +1,21 @@
 #!/bin/bash
 set -euo pipefail
-BASE_DIR="/opt/nanohub/profiles/wireguard_configs"
-find "$BASE_DIR" -type f -iname '*.conf' | while IFS= read -r conf; do
+# Single-file variant of gen_wireguard_mobileconfig — generates .mobileconfig
+# for the given .conf file(s) only, instead of regenerating the whole tree.
+# Usage: gen_wireguard_mobileconfig_single /path/to/<user>-sloto-wg.conf [...]
+if [ "$#" -lt 1 ]; then
+    echo "Usage: $0 /path/to/profile.conf [more.conf ...]"
+    exit 1
+fi
+for conf in "$@"; do
+    if [ ! -f "$conf" ]; then
+        echo "[ERROR] File '$conf' not found." >&2
+        exit 1
+    fi
+    case "$conf" in
+        *.conf) ;;
+        *) echo "[ERROR] '$conf' is not a .conf file." >&2; exit 1 ;;
+    esac
     filename=$(basename "$conf")
     name="${filename%.conf}"
     output_dir=$(dirname "$conf")

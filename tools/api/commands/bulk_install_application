@@ -39,10 +39,10 @@ MANAGEMENT_FLAGS="$4"
 DELAY_SECONDS=2
 
 # Source environment variables for DB credentials
-if [[ -f /home/microm/nanohub/environment.sh ]]; then
-  source /home/microm/nanohub/environment.sh
+if [[ -f /opt/nanohub/environment.sh ]]; then
+  source /opt/nanohub/environment.sh
 else
-  echo "Error: /home/microm/nanohub/environment.sh not found!"
+  echo "Error: /opt/nanohub/environment.sh not found!"
   exit 1
 fi
 

@@ -39,10 +39,10 @@ if [ ! -x "$REMOVE_PROFILE_SCRIPT" ]; then
 fi
 
 # Source environment variables for DB credentials
-if [[ -f /home/microm/nanohub/environment.sh ]]; then
-  source /home/microm/nanohub/environment.sh
+if [[ -f /opt/nanohub/environment.sh ]]; then
+  source /opt/nanohub/environment.sh
 else
-  echo "[ERROR] /home/microm/nanohub/environment.sh not found!"
+  echo "[ERROR] /opt/nanohub/environment.sh not found!"
   exit 1
 fi
 
