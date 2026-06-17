@@ -29,6 +29,8 @@ from nanohub_admin.core import (
 from nanohub_admin.commands import (
     execute_command,
     execute_bulk_command,
+    start_async_command,
+    get_job,
 )
 
 logger = logging.getLogger('nanohub_admin')
@@ -1044,39 +1046,9 @@ ADMIN_COMMAND_TEMPLATE = '''
         })
         .then(r => r.json())
         .then(data => {
-            document.getElementById('loading').style.display = 'none';
-
-            let outputHtml = '<div class="output-panel ' + (data.success ? 'success' : 'error') + '">';
-
-            // Show script output
-            outputHtml += '<strong>Script Output:</strong>\\n';
-            if (data.output) {
-                outputHtml += escapeHtml(data.output);
-            } else if (data.error) {
-                outputHtml += 'Error: ' + escapeHtml(data.error);
-            } else if (data.results) {
-                data.results.forEach(r => {
-                    outputHtml += '=== ' + r.device + ' ===\\n';
-                    outputHtml += (r.success ? 'SUCCESS' : 'FAILED') + '\\n';
-                    outputHtml += escapeHtml(r.output || r.error || '') + '\\n\\n';
-                    if (r.webhook_response) {
-                        outputHtml += '\\n<strong>Device Response:</strong>\\n';
-                        outputHtml += formatWebhookResponse(r.webhook_response);
-                    }
-                });
-            }
-
-            // Show webhook response if available
-            if (data.webhook_response) {
-                outputHtml += '\\n\\n<strong>Device Response (webhook):</strong>\\n';
-                outputHtml += formatWebhookResponse(data.webhook_response);
-            }
-
-            outputHtml += '</div>';
-            document.getElementById('output-container').innerHTML = outputHtml;
-            // Enable page scroll and scroll to output
-            document.body.classList.add('has-command-output');
-            document.getElementById('output-container').scrollIntoView({behavior: 'smooth', block: 'start'});
+            // Long-running bulk commands run async server-side: poll for result.
+            if (data.async && data.job_id) { pollJob(data.job_id); return; }
+            renderOutput(data);
         })
         .catch(err => {
             document.getElementById('loading').style.display = 'none';
@@ -1084,6 +1056,63 @@ ADMIN_COMMAND_TEMPLATE = '''
                 '<div class="output-panel error">Request failed: ' + escapeHtml(err.toString()) + '</div>';
             document.body.classList.add('has-command-output');
         });
+    }
+
+    function pollJob(jobId, attempt) {
+        attempt = attempt || 0;
+        // Cap polling so a persistent non-JSON error (e.g. 502/504 during a
+        // service restart) can't loop forever. 200 * 3s ~= 10 min.
+        if (attempt >= 200) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('output-container').innerHTML =
+                '<div class="output-panel error">Timed out waiting for command result. The operation may still be running on the server.</div>';
+            document.body.classList.add('has-command-output');
+            return;
+        }
+        fetch('/admin/job/' + jobId)
+            .then(r => r.json())
+            .then(d => {
+                if (d.status === 'running') { setTimeout(() => pollJob(jobId, attempt + 1), 3000); return; }
+                renderOutput(d);
+            })
+            // transient errors (e.g. brief 504) shouldn't abort polling
+            .catch(() => setTimeout(() => pollJob(jobId, attempt + 1), 3000));
+    }
+
+    function renderOutput(data) {
+        document.getElementById('loading').style.display = 'none';
+
+        let outputHtml = '<div class="output-panel ' + (data.success ? 'success' : 'error') + '">';
+
+        // Show script output
+        outputHtml += '<strong>Script Output:</strong>\\n';
+        if (data.output) {
+            outputHtml += escapeHtml(data.output);
+        } else if (data.error) {
+            outputHtml += 'Error: ' + escapeHtml(data.error);
+        } else if (data.results) {
+            data.results.forEach(r => {
+                outputHtml += '=== ' + r.device + ' ===\\n';
+                outputHtml += (r.success ? 'SUCCESS' : 'FAILED') + '\\n';
+                outputHtml += escapeHtml(r.output || r.error || '') + '\\n\\n';
+                if (r.webhook_response) {
+                    outputHtml += '\\n<strong>Device Response:</strong>\\n';
+                    outputHtml += formatWebhookResponse(r.webhook_response);
+                }
+            });
+        }
+
+        // Show webhook response if available
+        if (data.webhook_response) {
+            outputHtml += '\\n\\n<strong>Device Response (webhook):</strong>\\n';
+            outputHtml += formatWebhookResponse(data.webhook_response);
+        }
+
+        outputHtml += '</div>';
+        document.getElementById('output-container').innerHTML = outputHtml;
+        // Enable page scroll and scroll to output
+        document.body.classList.add('has-command-output');
+        document.getElementById('output-container').scrollIntoView({behavior: 'smooth', block: 'start'});
     }
 
     function escapeHtml(text) {
@@ -1236,8 +1265,33 @@ def admin_execute():
         results = execute_bulk_command(cmd_id, params['devices'], params, user)
         return jsonify({'success': True, 'results': results})
 
+    # Long-running native bulk commands run a synchronous loop with per-item
+    # sleeps that can exceed the nginx proxy_read_timeout (300s). Run them in a
+    # background thread and let the frontend poll /admin/job/<id> for the result.
+    async_commands = [
+        'bulk_new_device_installation',
+        'bulk_install_application',
+        'bulk_schedule_os_update',
+    ]
+    if cmd_id in async_commands:
+        job_id = start_async_command(cmd_id, params, user)
+        return jsonify({'success': True, 'async': True, 'job_id': job_id})
+
     result = execute_command(cmd_id, params, user)
     return jsonify(result)
+
+
+@dashboard_bp.route('/job/<job_id>')
+@login_required_admin
+def admin_job(job_id):
+    """Poll the status/result of an async command started via /admin/execute."""
+    job = get_job(job_id)
+    if not job:
+        return jsonify({'success': False, 'error': 'Unknown or expired job'}), 404
+    if job['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running'})
+    # Finished: return the stored execute_command result verbatim
+    return jsonify(job['result'])
 
 
 @dashboard_bp.route('/api/commands')

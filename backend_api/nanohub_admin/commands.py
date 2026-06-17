@@ -23,6 +23,8 @@ import urllib.error
 import logging
 import subprocess
 import time
+import uuid
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
@@ -48,6 +50,47 @@ logger = logging.getLogger(__name__)
 
 # Thread pool for parallel command execution
 thread_pool = ThreadPoolExecutor(max_workers=10)
+
+# ---------------------------------------------------------------------------
+# Async job registry for long-running bulk commands
+# ---------------------------------------------------------------------------
+# Long bulk operations (e.g. bulk_new_device_installation) run a synchronous
+# loop with per-item sleeps that can exceed the nginx proxy_read_timeout (300s),
+# making the browser receive a 504 HTML page and fail JSON parsing. These jobs
+# run in a background thread instead; the frontend polls /admin/job/<id>.
+_JOBS = {}
+_JOBS_LOCK = threading.Lock()
+_JOB_TTL = 3600  # keep finished jobs for 1h
+
+
+def start_async_command(cmd_id, params, user_info):
+    """Run execute_command in a background thread, return a job_id immediately."""
+    job_id = uuid.uuid4().hex
+    with _JOBS_LOCK:
+        _JOBS[job_id] = {'status': 'running', 'result': None, 'started': time.time()}
+
+    def _worker():
+        try:
+            res = execute_command(cmd_id, params, user_info)
+        except Exception as e:
+            logger.exception("Async command %s failed", cmd_id)
+            res = {'success': False, 'error': str(e)}
+        with _JOBS_LOCK:
+            if job_id in _JOBS:
+                _JOBS[job_id].update(status='done', result=res)
+
+    threading.Thread(target=_worker, daemon=True, name=f"job-{cmd_id}").start()
+    return job_id
+
+
+def get_job(job_id):
+    """Return a copy of the job state, or None. Also prunes expired jobs."""
+    with _JOBS_LOCK:
+        cutoff = time.time() - _JOB_TTL
+        for k in [k for k, v in _JOBS.items() if v['started'] < cutoff]:
+            _JOBS.pop(k, None)
+        job = _JOBS.get(job_id)
+        return dict(job) if job else None
 
 
 def execute_command(cmd_id, params, user_info):
