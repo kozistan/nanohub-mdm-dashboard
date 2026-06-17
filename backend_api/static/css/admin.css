@@ -261,6 +261,12 @@ html body.page-with-table.has-command-output form#commandForm .form-group:has(.d
     flex: 0 0 auto !important;
 }
 
+/* device-picker-fix: drzet vysku pickeru i PRED spustenim prikazu (device_manager ma
+   nejvic poli pod pickerem -> bez tohoto flexbox smrsti tabulku na ~2 radky) */
+html body.page-with-table form#commandForm .form-group:has(.device-table-container) {
+    flex: 0 0 auto !important;
+}
+
 html body.page-with-table .admin-header,
 html body.page-with-table .filter-form,
 html body.page-with-table .sub-tabs,
@@ -315,6 +321,8 @@ html body.page-with-table #tab-content-ddm #ddm-content > .table-wrapper {
 
 /* Device table container - compact by default, controlled by inline style in template */
 .device-table-container {
+    flex-shrink: 0; /* device-picker-fix: nesmrstit pod max-height v flex-column panelu */
+    min-height: 240px;
     max-height: 400px;
     overflow-y: auto;
     overflow-x: hidden;
