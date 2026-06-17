@@ -52,6 +52,33 @@ Template files location:
 - `/opt/nanohub/backend_api/nanohub_admin/routes/devices.py` - Device list & detail templates
 - `/opt/nanohub/backend_api/nanohub_admin/routes/*.py` - Other route-specific templates
 
+## Dashboard Panel "Something went wrong"
+
+Panels on the dashboard home (e.g. **DEP Server Information**, **Certificate Expiry**) show
+`Something went wrong` even though the backend, DEP token and APNs are healthy.
+
+**Cause:** the panels fetch `/api/dep-account-detail` and `/api/cfg-get-cert`. These endpoints
+run shell scripts that call `curl $CURL_OPTS ...`. When `CURL_OPTS` is missing from
+`environment.sh`, curl runs without `-s` and prints its progress meter to **stderr**.
+`command_executor.py` merges stderr into stdout (`output = result.stdout + result.stderr`),
+so the progress meter is appended after the JSON. The frontend's `apiFetch` then calls
+`res.json()`, which throws `JSONDecodeError: Extra data` → the panel's `onError` fires.
+
+**Diagnosis** — response must be clean, valid JSON:
+```bash
+curl -s http://localhost:8000/api/dep-account-detail | python3 -m json.tool >/dev/null \
+  && echo OK || echo "CORRUPTED — check CURL_OPTS"
+grep -n '^export CURL_OPTS=' /opt/nanohub/environment.sh   # must exist
+```
+
+**Fix** — ensure `environment.sh` defines silent curl, then restart the API:
+```bash
+# -s silences the progress meter, -S still surfaces real errors
+grep -q '^export CURL_OPTS=' /opt/nanohub/environment.sh \
+  || sed -i '/^export BASE_URL=/a export CURL_OPTS="-sS"' /opt/nanohub/environment.sh
+sudo systemctl restart mdm-flask-api
+```
+
 ## NGINX Static Files
 
 **CRITICAL:** Nginx serves static files from a different path than Flask!
