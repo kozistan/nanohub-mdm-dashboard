@@ -125,3 +125,48 @@ curl -H "Authorization: Bearer $VPP_TOKEN" \
 2. Verify device is online
 3. Check Command History for errors
 4. Ensure app is compatible with device OS version
+
+### Install Loop — ASDServerError 9610 (managed/unmanaged conflict)
+
+**Symptom:** webhook log floods with `mdm.Connect / status: Error` for an `InstallApplication`
+command that never succeeds; the same app re-pushes on every device connect (thousands of
+errors/month). Device result carries:
+
+```
+ErrorDomain = ASDServerErrorDomain   ErrorCode = 9610   "Unhandled exception"
+RejectionReason = Other              State = Failed
+```
+
+**Root cause:** the app is already present on the device as an **unmanaged copy** (Munki /
+direct `.pkg` / `.dmg` on macOS). A managed VPP `InstallApplication`/update cannot take over an
+existing unmanaged copy → permanent failure. `update_vpp_from_db` keeps re-pushing because:
+
+- the catalog version is genuinely newer than installed (e.g. Office 16.110 > 16.10x), **or**
+- the catalog version is `"unknown"` and `sort -V` ranked it above any real version (Perplexity,
+  Brave, Jitsi, JivoChat — catalog `version: "unknown"`).
+
+> ⚠️ The `is_app_store` flag in device inventory is **not** a reliable "managed" signal — it is
+> `true` only for Apple first-party apps. Judge managed/unmanaged state by install Error counts.
+
+**Fix (in `tools/api/commands/update_vpp_from_db`, 2026-06-17):**
+
+- `version_gt()` guard — an `unknown`/empty expected version is never treated as newer.
+- `MIGRATION_PENDING` list (adamIds of apps managed outside VPP) — in the **update** branch the
+  managed push is skipped (`[MIGRATION-PENDING]`) when the app is already installed. The
+  **install** branch (app absent) is **not** guarded, so new devices still get a managed VPP
+  install. Nothing is removed from devices — existing copies keep working.
+
+**Migrating an app to truly managed:** in a maintenance window remove the unmanaged copy and let
+VPP reinstall it managed, then drop its adamId from `MIGRATION_PENDING`.
+
+**Diagnostics:**
+
+```sql
+-- Install outcomes per app across the fleet (loops show up as high Error counts)
+SELECT REGEXP_SUBSTR(c.command,'[0-9]{9,}') adamId, r.status, COUNT(*) n
+FROM commands c JOIN command_results r ON r.command_uuid=c.command_uuid
+WHERE c.request_type='InstallApplication' GROUP BY adamId, r.status;
+
+-- ErrorChain of a specific failure
+SELECT result FROM command_results WHERE command_uuid='<UUID>';
+```
