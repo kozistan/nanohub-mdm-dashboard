@@ -321,8 +321,6 @@ html body.page-with-table #tab-content-ddm #ddm-content > .table-wrapper {
 
 /* Device table container - compact by default, controlled by inline style in template */
 .device-table-container {
-    flex-shrink: 0; /* device-picker-fix: nesmrstit pod max-height v flex-column panelu */
-    min-height: 240px;
     max-height: 400px;
     overflow-y: auto;
     overflow-x: hidden;
