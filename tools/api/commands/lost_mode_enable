@@ -1,0 +1,112 @@
+#!/bin/bash
+# Source environment
+source /opt/nanohub/environment.sh
+# NanoHUB EnableLostMode - put a supervised iOS/iPadOS device into Lost Mode.
+# Locks the device and displays a message/phone/footnote on the lock screen.
+# Usage: ./lost_mode_enable <UDID> [--message "text"] [--phone "+420..."] [--footnote "text"]
+#
+# At least Message OR PhoneNumber OR Footnote should be supplied (Apple requirement).
+
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <UDID> [--message TEXT] [--phone NUMBER] [--footnote TEXT]"
+    exit 1
+fi
+
+UDID="$1"; shift
+MESSAGE=""
+PHONE=""
+FOOTNOTE=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --message)  MESSAGE="$2";  shift 2 ;;
+        --phone)    PHONE="$2";    shift 2 ;;
+        --footnote) FOOTNOTE="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1"; exit 1 ;;
+    esac
+done
+
+# Default message if nothing supplied (Apple needs at least one field)
+if [ -z "$MESSAGE" ] && [ -z "$PHONE" ] && [ -z "$FOOTNOTE" ]; then
+    MESSAGE="This device has been lost. Please contact the owner."
+fi
+
+# XML-escape helper (&, <, >)
+xesc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+CMD_UUID=$(uuidgen)
+TEMP_PLIST="/tmp/cmd_${UDID}_$$.plist"
+
+{
+    echo '<?xml version="1.0" encoding="UTF-8"?>'
+    echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    echo '<plist version="1.0">'
+    echo '<dict>'
+    echo '    <key>Command</key>'
+    echo '    <dict>'
+    echo '        <key>RequestType</key>'
+    echo '        <string>EnableLostMode</string>'
+    [ -n "$MESSAGE" ]  && echo "        <key>Message</key><string>$(xesc "$MESSAGE")</string>"
+    [ -n "$PHONE" ]    && echo "        <key>PhoneNumber</key><string>$(xesc "$PHONE")</string>"
+    [ -n "$FOOTNOTE" ] && echo "        <key>Footnote</key><string>$(xesc "$FOOTNOTE")</string>"
+    echo '    </dict>'
+    echo '    <key>CommandUUID</key>'
+    echo "    <string>$CMD_UUID</string>"
+    echo '</dict>'
+    echo '</plist>'
+} > "$TEMP_PLIST"
+
+echo "Enabling Lost Mode: $UDID"
+echo "Command UUID: $CMD_UUID"
+
+RESPONSE=$(curl -s -T "$TEMP_PLIST" \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+
+rm -f "$TEMP_PLIST"
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "EnableLostMode command sent successfully! Device will lock on next check-in."
+else
+    echo "Failed to send EnableLostMode command (HTTP: $HTTP_CODE)"
+    echo "Response: $BODY"
+    exit 1
+fi
+
+# Auto-chain a DeviceLocation request — enabling Lost Mode always also asks for
+# the location (conditional on the enable succeeding). NanoMDM keeps queue order,
+# so the device processes EnableLostMode first, then answers DeviceLocation.
+LOC_UUID=$(uuidgen)
+LOC_PLIST="/tmp/cmd_${UDID}_loc_$$.plist"
+cat > "$LOC_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Command</key>
+    <dict>
+        <key>RequestType</key>
+        <string>DeviceLocation</string>
+    </dict>
+    <key>CommandUUID</key>
+    <string>$LOC_UUID</string>
+</dict>
+</plist>
+PLIST_EOF
+
+LOC_RESPONSE=$(curl -s -T "$LOC_PLIST" \
+  -u "nanohub:${NANOHUB_API_KEY}" \
+  -w "HTTP_CODE:%{http_code}" \
+  "http://localhost:9004/api/v1/nanomdm/enqueue/$UDID")
+LOC_CODE=$(echo "$LOC_RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+rm -f "$LOC_PLIST"
+
+if [ "$LOC_CODE" = "200" ]; then
+    echo "DeviceLocation auto-requested (UUID: $LOC_UUID). Location appears on the device Location tab after check-in."
+else
+    echo "WARN: auto DeviceLocation request failed (HTTP: $LOC_CODE) — request it manually via Lost Mode > Request Location."
+fi

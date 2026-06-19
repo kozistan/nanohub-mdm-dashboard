@@ -281,6 +281,35 @@ def execute_command(cmd_id, params, user_info):
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
+    # Lost Mode (iOS/iPadOS) — single command, action selects the script.
+    # Require an audit reason; build args explicitly so 'reason' is NOT passed to
+    # the script (it is recorded by audit_log via params). DeviceLocation (locate)
+    # only works while the device is in active Lost Mode.
+    elif cmd_id == 'lost_mode':
+        if not udid:
+            return {'success': False, 'error': 'Missing required parameter: udid'}
+        if not params.get('reason'):
+            return {'success': False, 'error': 'Missing required parameter: reason (audit)'}
+        action_scripts = {
+            'enable': 'lost_mode_enable',
+            'locate': 'device_location',
+            'disable': 'lost_mode_disable',
+        }
+        action = params.get('action')
+        if action not in action_scripts:
+            return {'success': False, 'error': 'Invalid action (expected enable/locate/disable)'}
+        real_script = os.path.join(script_dir, action_scripts[action])
+        if not os.path.exists(real_script):
+            return {'success': False, 'error': f'Script not found: {action_scripts[action]}'}
+        args = [real_script, sanitize_param(udid)]
+        if action == 'enable':
+            if params.get('message'):
+                args.extend(['--message', sanitize_param(str(params['message']))])
+            if params.get('phone'):
+                args.extend(['--phone', sanitize_param(str(params['phone']))])
+            if params.get('footnote'):
+                args.extend(['--footnote', sanitize_param(str(params['footnote']))])
+
     # Default parameter handling
     else:
         for param_def in cmd.get('parameters', []):

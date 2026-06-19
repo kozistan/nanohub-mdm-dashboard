@@ -664,7 +664,13 @@ DEVICE_DETAIL_TEMPLATE = '''
             border: 1px solid #3A3A3A;
             border-radius: 5px;
         }
+        #location-map { height: 420px; width: 100%; border-radius: 6px; border: 1px solid #3A3A3A; }
+        .leaflet-container { background: #1a1a1a; }
     </style>
+    {% if is_ios %}
+    <link rel="stylesheet" href="/static/leaflet/leaflet.css"/>
+    <script src="/static/leaflet/leaflet.js"></script>
+    {% endif %}
 </head>
 <body class="page-with-table">
     <div id="wrap">
@@ -687,6 +693,7 @@ DEVICE_DETAIL_TEMPLATE = '''
                 <button class="tab-btn active" onclick="showTab('info', this)">Info</button>
                 <button class="tab-btn" onclick="showTab('hardware', this)" id="tab-hardware">Hardware</button>
                 <button class="tab-btn" onclick="showTab('security', this)" id="tab-security">Security</button>
+                {% if is_ios %}<button class="tab-btn" onclick="showTab('location', this)" id="tab-location">Location</button>{% endif %}
                 <button class="tab-btn" onclick="showTab('profiles', this)" id="tab-profiles">Profiles <span class="badge" id="profiles-count">-</span></button>
                 <button class="tab-btn" onclick="showTab('apps', this)" id="tab-apps">Apps <span class="badge" id="apps-count">-</span></button>
                 <button class="tab-btn" onclick="showTab('ddm', this)" id="tab-ddm">DDM <span class="badge" id="ddm-count">-</span></button>
@@ -773,6 +780,40 @@ DEVICE_DETAIL_TEMPLATE = '''
                 <div id="security-loading" style="display:none;"><span class="loading-spinner"></span> Querying device...</div>
                 <div id="security-content" class="info-grid"></div>
             </div>
+
+            {% if is_ios %}
+            <!-- Location Tab (Lost Mode, read-only) -->
+            <div id="tab-content-location" class="tab-content">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+                    <h3 style="margin:0;">Last Known Location</h3>
+                    <span style="font-size:12px;color:#888;">Read-only. Use the <b>Lost Mode</b> commands to enable Lost Mode and request a location.</span>
+                </div>
+                {% if location %}
+                <div class="info-grid" style="margin-bottom:15px;">
+                    <div class="info-card"><label>Latitude</label><div>{{ '%.6f'|format(location.latitude) }}</div></div>
+                    <div class="info-card"><label>Longitude</label><div>{{ '%.6f'|format(location.longitude) }}</div></div>
+                    <div class="info-card"><label>Accuracy</label><div>{% if location.horizontal_accuracy is not none %}±{{ '%.0f'|format(location.horizontal_accuracy) }} m{% else %}-{% endif %}</div></div>
+                    <div class="info-card"><label>Reported</label><div>{{ location.timestamp or location.updated_at or '-' }}</div></div>
+                </div>
+                <div id="location-map"
+                     data-lat="{{ location.latitude }}"
+                     data-lon="{{ location.longitude }}"
+                     data-acc="{{ location.horizontal_accuracy if location.horizontal_accuracy is not none else 0 }}"></div>
+                <p style="margin-top:10px;">
+                    <a class="btn" target="_blank" rel="noopener"
+                       href="https://www.openstreetmap.org/?mlat={{ location.latitude }}&mlon={{ location.longitude }}#map=16/{{ location.latitude }}/{{ location.longitude }}">Open in OpenStreetMap</a>
+                    <a class="btn" target="_blank" rel="noopener"
+                       href="https://maps.apple.com/?ll={{ location.latitude }},{{ location.longitude }}">Open in Apple Maps</a>
+                </p>
+                {% else %}
+                <div class="info-card" style="padding:20px;">
+                    <p style="margin:0;">No location on record. Location is available only after the device is placed in
+                    <b>Lost Mode</b> and a <b>Request Location</b> command has been answered by the device.</p>
+                    <p style="margin:8px 0 0;color:#888;font-size:13px;">Workflow: Commands → <i>Lost Mode: Enable</i> → <i>Lost Mode: Request Location</i> → (recover) → <i>Lost Mode: Disable</i>.</p>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
 
             <!-- Profiles Tab -->
             <div id="tab-content-profiles" class="tab-content">
@@ -923,6 +964,34 @@ DEVICE_DETAIL_TEMPLATE = '''
                     loadDdmStatus();
                 }
             }
+
+            // Init Leaflet map lazily when Location tab is shown (needs visible container)
+            if (tabName === 'location') {
+                initLocationMap();
+            }
+        }
+
+        let _locationMap = null;
+        function initLocationMap() {
+            const el = document.getElementById('location-map');
+            if (!el || _locationMap || typeof L === 'undefined') return;
+            const lat = parseFloat(el.dataset.lat);
+            const lon = parseFloat(el.dataset.lon);
+            const acc = parseFloat(el.dataset.acc) || 0;
+            if (isNaN(lat) || isNaN(lon)) return;
+            // Self-hosted marker images (portal serves them, no external dependency)
+            L.Icon.Default.imagePath = '/static/leaflet/images/';
+            _locationMap = L.map('location-map').setView([lat, lon], 16);
+            L.tileLayer('/osm-tiles/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(_locationMap);
+            L.marker([lat, lon]).addTo(_locationMap);
+            if (acc > 0) {
+                L.circle([lat, lon], { radius: acc, color: '#e92128', fillOpacity: 0.1 }).addTo(_locationMap);
+            }
+            // Fix tile sizing after the tab becomes visible
+            setTimeout(() => _locationMap.invalidateSize(), 100);
         }
 
         // Updates panel layout class based on whether active data tab has content
@@ -1580,12 +1649,39 @@ def device_detail(device_uuid):
     except Exception as e:
         logger.error(f"Failed to get required profiles status: {e}")
 
+    # Last known location (Lost Mode) — iOS/iPadOS only
+    location = None
+    is_ios = (device.get('os') or '').lower() in ('ios', 'ipados')
+    if is_ios:
+        try:
+            loc_row = db.query_one("""
+                SELECT location_data, location_updated_at
+                FROM device_details WHERE uuid = %s
+            """, (device_uuid,))
+            if loc_row and loc_row.get('location_data'):
+                loc = loc_row.get('location_data')
+                if isinstance(loc, str):
+                    loc = json.loads(loc)
+                if isinstance(loc, dict) and loc.get('latitude') is not None and loc.get('longitude') is not None:
+                    location = {
+                        'latitude': loc.get('latitude'),
+                        'longitude': loc.get('longitude'),
+                        'horizontal_accuracy': loc.get('horizontal_accuracy'),
+                        'altitude': loc.get('altitude'),
+                        'timestamp': loc.get('timestamp'),
+                        'updated_at': loc_row.get('location_updated_at'),
+                    }
+        except Exception as e:
+            logger.error(f"Failed to get location for {device_uuid}: {e}")
+
     return render_template_string(
         DEVICE_DETAIL_TEMPLATE,
         user=user,
         device=device,
         history=history,
-        required_profiles_status=required_profiles_status
+        required_profiles_status=required_profiles_status,
+        is_ios=is_ios,
+        location=location
     )
 
 

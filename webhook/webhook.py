@@ -119,6 +119,7 @@ def save_device_details(udid: str, data_type: str, data: dict, command_uuid: str
             'security': ('security_data', 'security_updated_at'),
             'profiles': ('profiles_data', 'profiles_updated_at'),
             'apps': ('apps_data', 'apps_updated_at'),
+            'location': ('location_data', 'location_updated_at'),
         }
 
         if data_type not in column_map:
@@ -154,6 +155,32 @@ def save_device_details(udid: str, data_type: str, data: dict, command_uuid: str
 # =============================================================================
 # DATA PARSERS
 # =============================================================================
+
+def parse_device_location(plist_data: dict) -> dict:
+    """Parse DeviceLocation response (Lost Mode) into structured data.
+
+    Apple returns Latitude/Longitude/etc at the top level of the Acknowledged
+    response. Only available while the supervised device is in Lost Mode.
+    """
+    def num(key):
+        val = plist_data.get(key)
+        try:
+            return float(val) if val is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    ts = plist_data.get('Timestamp')
+    return {
+        'latitude': num('Latitude'),
+        'longitude': num('Longitude'),
+        'horizontal_accuracy': num('HorizontalAccuracy'),
+        'altitude': num('Altitude'),
+        'vertical_accuracy': num('VerticalAccuracy'),
+        'speed': num('Speed'),
+        'course': num('Course'),
+        'timestamp': str(ts) if ts is not None else None,
+    }
+
 
 def parse_device_information(plist_data: dict) -> dict:
     """Parse DeviceInformation response into structured data."""
@@ -863,6 +890,18 @@ def webhook():
                 saved = save_device_details(udid, 'hardware', hardware_data, command_uuid)
                 if saved:
                     logger.info(f"  [DB] Saved to device_details.hardware_data")
+
+            # DeviceLocation (Lost Mode) — Latitude/Longitude at top level
+            elif request_type == "DeviceLocation" or "Latitude" in plist_data:
+                logger.info("[DeviceLocation] Lost Mode location:")
+                location_data = parse_device_location(plist_data)
+                logger.info(f"  lat={location_data.get('latitude')} "
+                            f"lon={location_data.get('longitude')} "
+                            f"acc={location_data.get('horizontal_accuracy')} "
+                            f"ts={location_data.get('timestamp')}")
+                saved = save_device_details(udid, 'location', location_data, command_uuid)
+                if saved:
+                    logger.info(f"  [DB] Saved to device_details.location_data")
 
             # SecurityInfo
             elif "SecurityInfo" in plist_data:
